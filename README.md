@@ -17,3 +17,18 @@ Two websites you will need:
 
 ## I Know
 Having the DB be a json file is not very smart. But it was quick and easy for making this bot
+
+## Commands can take a while to register
+You can add this code to the decorator:
+
+guild_ids=[GUILD_ID]
+
+@bot.slash_command(
+    name="notification",
+    description="Set up an automated DM with activity instructions",
+    guild_ids=[GUILD_ID]
+)
+
+This will make it register fast when you are wanting to test. 
+
+It may take time for it to propagate to the other servers

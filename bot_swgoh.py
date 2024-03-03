@@ -25,6 +25,11 @@ try:
 except FileNotFoundError:
     guild_reset_times = {}
 
+try:
+    with open("personal_reset_times.json", "r") as file:
+        personal_reset_times = json.load(file)
+except FileNotFoundError:
+    guild_reset_times = {}
 
 @bot.event
 async def on_ready():
@@ -117,7 +122,6 @@ def get_activity_message(day, personalreset, next_reset_time_str=None):
 
     return activity_message
 
-# Define the activity command
 @bot.slash_command(
     name="activity",
     description="Prints today's activity message",
@@ -148,14 +152,14 @@ async def activity(ctx: discord.ApplicationContext, showall: bool = False, day: 
         # If no specific day is provided, default to today
         requested_day = datetime.now().strftime("%A")
     
-    # Retrieve the activity message for the requested day
     next_reset_time_str = None
+    # Try to grab the user's Guild's next reset time
     if ctx.guild_id != None:
         if str(ctx.guild_id) in guild_reset_times:
             guildinfo = guild_reset_times[str(ctx.guild_id)]
             if guildinfo != None and guildinfo != {}:
                 next_reset_epoch = calculate_next_reset_epoch(guildinfo["resethour"], guildinfo["timeformat"], guildinfo["timezone"], False)
-                next_reset_time_str = f"<t:{next_reset_epoch}>"
+                next_reset_time_str = f"<t:{int(next_reset_epoch.timestamp())}>"
     
     activity_embed = get_activity_message(requested_day, personalreset, next_reset_time_str)
     
@@ -166,6 +170,11 @@ async def activity(ctx: discord.ApplicationContext, showall: bool = False, day: 
 def save_guild_reset_times():
     with open("guild_reset_times.json", "w") as file:
         json.dump(guild_reset_times, file)
+
+# Function to save guild reset times into JSON file
+def save_personal_reset_times():
+    with open("personal_reset_times.json", "w") as file:
+        json.dump(personal_reset_times, file)
 
 
         
@@ -183,7 +192,7 @@ async def get_hour_options(ctx: discord.AutocompleteContext):
     
 async def get_valid_timezones(ctx: discord.AutocompleteContext):
     text = ctx.value
-    filtered_timezones = [timezone for timezone in valid_timezones if timezone.startswith(text)]
+    filtered_timezones = [timezone for timezone in valid_timezones if text.lower() in timezone.lower()]
     if len(filtered_timezones) > 25:
         return filtered_timezones[:25]
     else:
@@ -218,8 +227,9 @@ async def get_valid_timezones(ctx: discord.AutocompleteContext):
 )
 async def register(ctx: discord.ApplicationContext, guildname: str, timezone: str, timeformat: str, resethour: str):
     if not ctx.author.guild_permissions.administrator:
-        admin_message = discord.Embed(title="Only an admin may run this command")
+        admin_message = discord.Embed(title="Only an admin may run this command", color=0xff0000)
         await ctx.respond(embed=admin_message)
+        return
     # Update the reset time for the guild in the JSON file
     # I could allow one server to have multiple guild notifications but for now its based off the discord server id (ctx.guild_id)
     guild_reset_times[str(ctx.guild_id)] = { 
@@ -232,7 +242,7 @@ async def register(ctx: discord.ApplicationContext, guildname: str, timezone: st
 
     # Calculate the next reset epoch time
     next_reset_epoch = calculate_next_reset_epoch(resethour, timeformat, timezone, False)
-    next_reset_time_str = f"<t:{next_reset_epoch}>"
+    next_reset_time_str = f"<t:{int(next_reset_epoch.timestamp())}>"
     
     # Save the guild reset times into the JSON file
     save_guild_reset_times()
@@ -249,9 +259,54 @@ async def unregister(ctx: discord.ApplicationContext):
     save_guild_reset_times()
     await ctx.respond(f"Guild has been unregistered successfully.")
 
+@bot.slash_command(
+    name="notification",
+    description="Set up an automated DM with activity instructions",
+    guild_ids=[618924061677846528]
+)
+@option(
+    "timezone",
+    description="Choose a valid timezone (start typing to filter)",
+    required=True,
+    autocomplete=get_valid_timezones
+)
+@option(
+    "timeformat",
+    description="This allows for 0-23 time on the next param or 1-12",
+    required=True,
+    choices=[FORMAT24, "AM", "PM"]
+)
+@option(
+    "resethour",
+    description="This is the time your personal reset happens so that you know what to do with your energy and such",
+    required=True,
+    autocomplete=get_hour_options
+)
+async def notification(ctx: discord.ApplicationContext, timezone: str, timeformat: str, resethour: str):
+    confirmation_message = discord.Embed(title="A DM will be sent to you shortly", color=0x00ff00)
+    await ctx.respond(embed=confirmation_message)
+    # Update the reset time for the user in the JSON file
+    personal_reset_times[str(ctx.user.id)] = { 
+        "timezone": timezone,
+        "timeformat": timeformat,
+        "resethour": resethour,
+        "channelid": ctx.channel_id,
+        "guildid": ctx.guild_id
+    }
+
+    # Calculate the next reset epoch time
+    next_reset_epoch = calculate_next_reset_epoch(resethour, timeformat, timezone, False)
+    next_reset_time_str = f"<t:{int(next_reset_epoch.timestamp())}>"
+    
+    # Save the guild reset times into the JSON file
+    save_personal_reset_times()
+    user = await bot.fetch_user(ctx.user.id)
+    await user.send(f"Personal reset time has been registered successfully! Next reset time: {next_reset_time_str}")
+
 # Function to calculate the next epoch time for the specified reset hour
-def calculate_next_reset_epoch(resethour, timeformat, timezone, today):
-    reset_time_str = f"{resethour}:" + RESET_MINUTE + ("" if timeformat == FORMAT24 else " " + timeformat)
+def calculate_next_reset_epoch(resethour, timeformat, timezone, today, personal = False):
+    resetmin = "00" if personal else RESET_MINUTE
+    reset_time_str = f"{resethour}:" + resetmin + ("" if timeformat == FORMAT24 else " " + timeformat)
     reset_time_format = "%H:%M" if timeformat == FORMAT24 else "%I:%M %p"
     reset_time = datetime.strptime(reset_time_str, reset_time_format)
     
@@ -262,7 +317,7 @@ def calculate_next_reset_epoch(resethour, timeformat, timezone, today):
     next_reset_time = reset_time.replace(year=now.year, month=now.month, day=now.day)
     if today != True and next_reset_time <= now:
         next_reset_time += timedelta(days=1)
-    return int(next_reset_time.timestamp())
+    return next_reset_time
 
 @tasks.loop(minutes=1)
 async def send_daily_message():
@@ -271,8 +326,8 @@ async def send_daily_message():
             reset_hour = reset_info["resethour"]
             timezone = reset_info["timezone"]
             timeformat = reset_info["timeformat"]
-            reset_epoch = calculate_next_reset_epoch(reset_hour, timeformat, timezone, True)
-            next_reset_time_str = f"<t:{reset_epoch}>"
+            reset_datetime = calculate_next_reset_epoch(reset_hour, timeformat, timezone, True)
+            next_reset_time_str = f"<t:{int(reset_datetime.timestamp())}>"
             
             # this grabs the channel information to send the message
             guild = bot.get_guild(int(guild_id))
@@ -282,21 +337,54 @@ async def send_daily_message():
                 # if channel:
                 #     await channel.send(f"Testing: {next_reset_time_str}")
             current_epoch = datetime.now().timestamp()
+            reset_epoch = reset_datetime.timestamp()
             if current_epoch >= reset_epoch and current_epoch < reset_epoch + 60: # this is the normal reset logic for each day
             # if current_epoch >= reset_epoch and (current_epoch - reset_epoch) % 3600 < 60: # this is an hourly tester
                 print("Matched!")
                 if channel:
-                    next_reset_time_str = f"<t:{int(current_epoch)}>" # remove this for normal reset timestamp
+                    reset_datetime += timedelta(days=1) # this will show what the next reset time is 
+                    next_reset_time_str = f"<t:{int(reset_datetime.timestamp())}>" 
                     day = datetime.now().strftime("%A")
                     await channel.send(embed=get_activity_message(day, False, next_reset_time_str))
 
+@tasks.loop(minutes=1)
+async def send_daily_personal_message():
+    for user_id, reset_info in personal_reset_times.items():
+        if reset_info != None and reset_info != {}:
+            reset_hour = reset_info["resethour"]
+            timezone = reset_info["timezone"]
+            timeformat = reset_info["timeformat"]
+            reset_datetime = calculate_next_reset_epoch(reset_hour, timeformat, timezone, True, True)
+            next_reset_time_str = f"<t:{int(reset_datetime.timestamp())}>"
+            
+            # this grabs the channel information to send the message
+            user = await bot.fetch_user(int(user_id))
+
+            current_epoch = datetime.now().timestamp()
+            reset_epoch = reset_datetime.timestamp()
+            if current_epoch >= reset_epoch and current_epoch < reset_epoch + 60: # this is the normal reset logic for each day
+            # if current_epoch >= reset_epoch and (current_epoch - reset_epoch) % 3600 < 60: # this is an hourly tester
+                if user:
+                    reset_datetime += timedelta(days=1) # this will show what the next reset time is 
+                    next_reset_time_str = f"<t:{int(reset_datetime.timestamp())}>" 
+                    day = datetime.now().strftime("%A")
+                    await user.send(embed=get_activity_message(day, True, next_reset_time_str))
+    
+                    
+
 @send_daily_message.before_loop
 async def before_send_daily_message():
-    print("Configuring automated messages...")
+    print("Configuring automated Guild messages...")
     await bot.wait_until_ready()
-    print("Polling every minute to send daily messages!")
+    print("Polling every minute to send daily Guild messages!")
 
+@send_daily_personal_message.before_loop
+async def before_send_daily_personal_message():
+    print("Configuring automated Personal messages...")
+    await bot.wait_until_ready()
+    print("Polling every minute to send daily Personal messages!")
 # Run the bot
 send_daily_message.start()
+send_daily_personal_message.start()
 bot.run(BOT_TOKEN)
 

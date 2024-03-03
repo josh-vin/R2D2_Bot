@@ -160,3 +160,4 @@ cython_debug/
 #.idea/
 
 guild_reset_times.json
+personal_reset_times.json
