@@ -97,7 +97,7 @@ activity_messages = {
 
 
 # Function to retrieve the activity message for the given day
-def get_activity_message(day, personalreset, next_reset_time_str=None):
+def get_activity_message(day, personalreset, next_reset_time_str = None, next_personal_reset_time_str = None):
     if personalreset:
         activity_message = discord.Embed(title=f'{day} Personal Reset Guild Activity', color=activity_messages[day]['HexColor'], description=f"{activity_messages[day]['Challenge Title']}", url="https://swgoh.wiki/wiki/Guild_Activities")
 
@@ -115,8 +115,13 @@ def get_activity_message(day, personalreset, next_reset_time_str=None):
     # Add thumbnail
     activity_message.set_thumbnail(url=activity_messages[day]['Image URL'])
 
+    # Add reset times
     if next_reset_time_str != None:
-        activity_message.add_field(name="Next reset time:", value=f":clock1: {next_reset_time_str} :clock2:")
+        activity_message.add_field(name="Next reset time:", value=f":clock1: {next_reset_time_str}")
+    if next_personal_reset_time_str != None:
+        activity_message.add_field(name="Next personal reset time:", value=f":clock6: {next_personal_reset_time_str}")
+    
+    # Add Footer if not empty
     if activity_messages[day]['Footer'] != None:
         activity_message.set_footer(text=activity_messages[day]['Footer'])
 
@@ -153,6 +158,7 @@ async def activity(ctx: discord.ApplicationContext, showall: bool = False, day: 
         requested_day = datetime.now().strftime("%A")
     
     next_reset_time_str = None
+    next_personal_reset_time_str = None
     # Try to grab the user's Guild's next reset time
     if ctx.guild_id != None:
         if str(ctx.guild_id) in guild_reset_times:
@@ -160,8 +166,14 @@ async def activity(ctx: discord.ApplicationContext, showall: bool = False, day: 
             if guildinfo != None and guildinfo != {}:
                 next_reset_epoch = calculate_next_reset_epoch(guildinfo["resethour"], guildinfo["timeformat"], guildinfo["timezone"], False)
                 next_reset_time_str = f"<t:{int(next_reset_epoch.timestamp())}>"
+    if ctx.user.id != None:
+        if str(ctx.user.id) in personal_reset_times:
+            user = personal_reset_times[str(ctx.user.id)]
+            if user != None and user != {}:
+                next_personal_reset_epoch = calculate_next_reset_epoch(user["resethour"], user["timeformat"], user["timezone"], False, True)
+                next_personal_reset_time_str = f"<t:{int(next_personal_reset_epoch.timestamp())}>"
     
-    activity_embed = get_activity_message(requested_day, personalreset, next_reset_time_str)
+    activity_embed = get_activity_message(requested_day, personalreset, next_reset_time_str, next_personal_reset_time_str)
     
     # Send the activity message
     await ctx.respond(embed=activity_embed)
@@ -295,7 +307,7 @@ async def notification(ctx: discord.ApplicationContext, timezone: str, timeforma
     }
 
     # Calculate the next reset epoch time
-    next_reset_epoch = calculate_next_reset_epoch(resethour, timeformat, timezone, False)
+    next_reset_epoch = calculate_next_reset_epoch(resethour, timeformat, timezone, False, True)
     next_reset_time_str = f"<t:{int(next_reset_epoch.timestamp())}>"
     
     # Save the guild reset times into the JSON file
@@ -387,4 +399,3 @@ async def before_send_daily_personal_message():
 send_daily_message.start()
 send_daily_personal_message.start()
 bot.run(BOT_TOKEN)
-
