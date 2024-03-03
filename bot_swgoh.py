@@ -1,9 +1,15 @@
+import os
+from dotenv import load_dotenv
 import discord
 from discord import option
 from discord.ext import tasks
 from datetime import datetime, timedelta
 import json
 import pytz
+
+# Load environment variables from .env file
+load_dotenv()
+BOT_TOKEN = os.getenv('BOT_TOKEN')
 
 # GLOBALS
 RESET_MINUTE = "30" # ex. 10:{30} <-
@@ -29,52 +35,57 @@ activity_messages = {
         "Challenge Title":"Spend Cantina Energy",
         "HexColor": 0xdb0b31,
         "Image URL": "https://swgoh.wiki/images/4/4c/Game-Icon-Cantina_Energy.png",
-        "Before Guild Reset": "Do your 5 Squad Arena PvP activity after your daily reset and before the Guild reset if possible Let your Cantina Energy accumulate, grab Bonus Cantina Energy as close to max collection time as possible to allow more time to accumulate before adding it on\n\n:white_check_mark: Spend all Normal Energy and 45 of the first Bonus Normal Energy\n:white_check_mark: Let the rest accumulate for tomorrow.",
-        "After Guild Reset": "Immediately do Cantina Battles activity by spending all Cantina Energy and if able do 2 refreshes Spend only as much additional Normal Energy as you need to reach 600 Raid Tickets Doing 3 refreshes of Normal Energy at the end of the day some time before your daily reset can save you about 50 Crystals for the next Guild Activity This requires you to spend your Energy for this day early in the morning so it can be at 144 before the last Bonus Energy Then you would do the 3 refreshes after that."
+        "Before Guild Reset": ":crossed_swords: Finish Squad Arena PvP Battles\n:no_entry: Do not spend Cantina Energy\n:moneybag: Buy Refresh Cantina Energy when close to max before reset",
+        "After Guild Reset": ":zap: Spend ALL Cantina Energy\n:checkered_flag: 2 refreshes is the Goal\n:arrows_counterclockwise: If you don't typically refresh Cantina, do it on this day\n:bulb: Spend rest of Normal Energy to reach 600 Raid Tickets",
+        "Footer": ""
     },
     "Monday": {
         "Challenge Title":"Spend Light Side Energy",
         "HexColor": 0xfdc331,
         "Image URL": "https://swgoh.wiki/images/b/ba/Game-Icon-Energy.png",
-        "Before Guild Reset": "Finish off Cantina Battles activity by spending Cantina Energy Spend only as much Cantina Energy as you need to get to or over 480 on the guild activity Start letting it accumulate for Tuesday And like the previous message states, get your Normal Energy refreshes saved up for after Guild Reset.",
-        "After Guild Reset": "Do Light Side activity by spending all Energy and if able do up to 3 refreshes Try to do this 2 and a half hours before Daily Activities Reset If you did not get Energy on Sunday for this you will need to do 2 additional refreshes to reach the goal Do not spend crystals on refreshing Hard Battles, do multiple Hard Battles or farm for Gear/Relic scrap mats."
+        "Before Guild Reset": ":zap: Spend Cantina Energy\n:bulb: Check Guild Tier and make sure you've spent enough\n:bulb: Save for ANY energy Activity in 2 days\n:arrows_counterclockwise: Buy 3 Refreshes of Normal Energy for next Activity",
+        "After Guild Reset": ":zap: Spend Light Side Energy\n:checkered_flag: 1400 is the Goal\n:bulb: Spend all Energy and Bonuses\n:arrows_counterclockwise: 3 refreshes all on Light Side",
+        "Footer": ""
     },
     "Tuesday": {
         "Challenge Title":"Spend ANY Energy",
         "HexColor": 0x9431fd,
         "Image URL": "https://swgoh.wiki/images/4/4e/Game-Icon-Conquest_Energy.png",
-        "Before Guild Reset": "Finish off Light Side activity by spending Normal Energy This will require 3 refreshes if no Energy refreshes were done on Sunday and 2 refreshes if there were Only use Energy up to the 1400 mark and let the rest of it along with all other types of energy accumulate for the next activity.",
-        "After Guild Reset": "Do Energy Battles activity by spending all Cantina Energy, + 1 refresh of Cantina Energy, and your Bonus Cantina Energy Spend all Ship Energy + 3 refreshes and Bonus Ship Energy Spend all Mod Energy + 2 refresh and Bonus Mod Energy."
+        "Before Guild Reset": ":zap: Spend Light Side Energy\n:octagonal_sign: STOP spending all other energy\n:bulb: Save energy for tomorrow's activity\n:coin: Saving can net 800+ Guild Tokens",
+        "After Guild Reset": ":money_with_wings: Spend ALL Energy\n:checkered_flag: 2400 is the Goal\n:arrows_counterclockwise: This is a great day for doing refreshes on all energy\n:bulb: Spend 2-3 refreshes on Ship and Mod Energy",
+        "Footer": ""
     },
     "Wednesday": {
         "Challenge Title":"Hard Battles",
         "HexColor": 0xb9b9b9,
         "Image URL": "https://swgoh.wiki/images/thumb/b/bd/Unit-Ship-Imperial_TIE_Bomber.png/370px-Unit-Ship-Imperial_TIE_Bomber.png",
-        "Before Guild Reset": "Spend your Normal Energy as early as possible and save all Bonus Normal Energy for the next activity If slightly off from 2400 use a little bit of Normal Energy Save some Hard Nodes if possible for the next activity.",
-        "After Guild Reset": "Do Hard Battles activity by spending all Normal Energy on any Dark Side or Light Side Hard Battle You will need to do 4 refreshes if aiming for the goal."
+        "Before Guild Reset": ":money_with_wings: Finish spending ALL Energy to 2400\n:bulb: Spend Normal energy early and then save for Hard Battles Activity\n:warning: Watch your Guild's Tier so you don't spend unnecessarily",
+        "After Guild Reset": ":tools: Do Hard Nodes for Light and Dark Side\n:checkered_flag: 4 refreshes is the Goal\n:no_entry_sign: Do NOT do your Daily Challenges after Personal Reset",
+        "Footer": "Be aware of when your personal reset is so that you can use challenges from both days that the next activity covers"
     },
     "Thursday": {
         "Challenge Title":"Daily Challenges",
         "HexColor": 0x30e71b,
         "Image URL": "https://swgoh.wiki/images/f/f8/Game-Icon-Sim_Ticket.png",
-        "Before Guild Reset": "Finish Hard Battles activity by spending all Energy on any Dark Side or Light Side Hard Battle You will need to do 4 refreshes if aiming for the goal **Save your Daily Challenges till after the Guild Reset tomorrow**",
-        "After Guild Reset": "Do Daily Challenges by completing all 8 Challenges and 2 Fleet Challenges.",
-        "Footer": "Be aware of when your personal reset is so that you can use attempts from both days that this activity covers"
+        "Before Guild Reset": ":tools: Finish Hard Battles activity\n:warning: Save Daily Challenges for Next Activity",
+        "After Guild Reset": ":gift: Do Daily Challenges\n:checkered_flag: 20 Challenges is the Goal\n:coin: 20 Challenges gets you 300+ tokens at Tier 7\n:bookmark_tabs: 8 Challenges and 2 Fleet Challenges",
+        "Footer": "Be aware of when your personal reset is so that you can use challenges from both days that this activity covers"
     },
     "Friday": {
         "Challenge Title":"Spend Dark Side Energy",
         "HexColor": 0xdb0b31,
         "Image URL": "https://swgoh.wiki/images/b/ba/Game-Icon-Energy.png",
-        "Before Guild Reset": "Do Daily Challenges after your daily reset by completing all 8 Challenges and 2 Fleet Challenges Save your Dark Side farming nodes till after the guild reset if possible.",
-        "After Guild Reset": "Do Dark Side activity by spending all Energy on any Dark Side Battles You will need to do 4 refreshes if aiming for the goal."
+        "Before Guild Reset": ":gift: Make sure you finished your Daily Challenges\n:zap: Save Normal Energy for Dark Side Activity",
+        "After Guild Reset": ":zap: Spend Energy on Dark Side nodes\n:checkered_flag: 4 refreshes is the Goal",
+        "Footer": "Be aware of when your personal reset is so that you can use PvP attempts from both days that the next activity covers"
     },
     "Saturday": {
         "Challenge Title":"Squad Arena PvP Attempts",
         "HexColor": 0x6a6969,
         "Image URL": "https://swgoh.wiki/images/0/0d/Game-Icon-Squad_Arena_Token.png",
-        "Before Guild Reset": ":zap: Spend Dark Side Energy\n:bulb: 4 refreshes maximizes guild potential for highest tier\n:x: Save Squad Arena PvP Battles if possible",
-        "After Guild Reset": ":crossed_swords: Squad Arena PvP Battles\n:bulb: 10 is the Max to shoot for",
-        "Footer": "Be aware of when your personal reset is so that you can use attempts from both days that this activity covers"
+        "Before Guild Reset": ":zap: Spend Dark Side Energy\n:no_entry: Save Squad Arena PvP Battles",
+        "After Guild Reset": ":crossed_swords: Squad Arena PvP Battles\n:checkered_flag: 10 is the Goal",
+        "Footer": "Be aware of when your personal reset is so that you can use PvP attempts from both days that this activity covers"
     }
 }
 
@@ -99,7 +110,7 @@ def get_activity_message(day, personalreset, next_reset_time_str=None):
     activity_message.set_thumbnail(url=activity_messages[day]['Image URL'])
 
     if next_reset_time_str != None:
-        activity_message.add_field(name="Next reset time:", value=f"{next_reset_time_str}")
+        activity_message.add_field(name="Next reset time:", value=f":clock1: {next_reset_time_str} :clock2:")
     if activity_messages[day]['Footer'] != None:
         activity_message.set_footer(text=activity_messages[day]['Footer'])
 
@@ -204,6 +215,9 @@ async def get_valid_timezones(ctx: discord.AutocompleteContext):
     autocomplete=get_hour_options
 )
 async def register(ctx: discord.ApplicationContext, guildname: str, timezone: str, timeformat: str, resethour: str):
+    if not ctx.author.guild_permissions.administrator:
+        admin_message = discord.Embed(title="Only an admin may run this command")
+        await ctx.respond(embed=admin_message)
     # Update the reset time for the guild in the JSON file
     # I could allow one server to have multiple guild notifications but for now its based off the discord server id (ctx.guild_id)
     guild_reset_times[str(ctx.guild_id)] = { 
@@ -263,8 +277,8 @@ async def send_daily_message():
             # if channel:
             #     await channel.send(f"Testing: {next_reset_time_str}")
         current_epoch = datetime.now().timestamp()
-        # if current_epoch >= reset_epoch and current_epoch < reset_epoch + 60: # this is the normal reset logic for each day
-        if current_epoch >= reset_epoch and (current_epoch - reset_epoch) % 3600 < 60: # this is an hourly tester
+        if current_epoch >= reset_epoch and current_epoch < reset_epoch + 60: # this is the normal reset logic for each day
+        # if current_epoch >= reset_epoch and (current_epoch - reset_epoch) % 3600 < 60: # this is an hourly tester
             print("Matched!")
             if channel:
                 next_reset_time_str = f"<t:{int(current_epoch)}>" # remove this for normal reset timestamp
@@ -279,5 +293,5 @@ async def before_send_daily_message():
 
 # Run the bot
 send_daily_message.start()
-bot.run("MTIwNzkwMDI4MjA4ODg0OTU0OA.GLSXd9.sHWCgITQWgxizgxSX5IeNRiJFVutOP_gkBc5bg")
+bot.run(BOT_TOKEN)
 
