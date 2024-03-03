@@ -6,6 +6,7 @@ from discord.ext import tasks
 from datetime import datetime, timedelta
 import json
 import pytz
+from zoneinfo import ZoneInfo
 
 # Load environment variables from .env file
 load_dotenv()
@@ -120,7 +121,6 @@ def get_activity_message(day, personalreset, next_reset_time_str=None):
 @bot.slash_command(
     name="activity",
     description="Prints today's activity message",
-    guild_ids=[618924061677846528]
 )
 @option(
     "showall",
@@ -149,10 +149,13 @@ async def activity(ctx: discord.ApplicationContext, showall: bool = False, day: 
         requested_day = datetime.now().strftime("%A")
     
     # Retrieve the activity message for the requested day
+    next_reset_time_str = None
     if ctx.guild_id != None:
-        guildinfo = guild_reset_times[str(ctx.guild_id)]
-        next_reset_epoch = calculate_next_reset_epoch(guildinfo["resethour"], guildinfo["timeformat"], guildinfo["timezone"], False)
-        next_reset_time_str = f"<t:{next_reset_epoch}>"
+        if str(ctx.guild_id) in guild_reset_times:
+            guildinfo = guild_reset_times[str(ctx.guild_id)]
+            if guildinfo != None and guildinfo != {}:
+                next_reset_epoch = calculate_next_reset_epoch(guildinfo["resethour"], guildinfo["timeformat"], guildinfo["timezone"], False)
+                next_reset_time_str = f"<t:{next_reset_epoch}>"
     
     activity_embed = get_activity_message(requested_day, personalreset, next_reset_time_str)
     
@@ -189,7 +192,6 @@ async def get_valid_timezones(ctx: discord.AutocompleteContext):
 @bot.slash_command(
     name="register",
     description="Register the guild's reset time to send the daily message",
-    guild_ids=[618924061677846528]
 )
 @option(
     "guildname",
@@ -239,7 +241,6 @@ async def register(ctx: discord.ApplicationContext, guildname: str, timezone: st
 @bot.slash_command(
     name="unregister",
     description="Register the guild's reset time to send the daily message",
-    guild_ids=[618924061677846528]
 )
 async def unregister(ctx: discord.ApplicationContext):
     # Clear the entry for the guild
@@ -253,7 +254,10 @@ def calculate_next_reset_epoch(resethour, timeformat, timezone, today):
     reset_time_str = f"{resethour}:" + RESET_MINUTE + ("" if timeformat == FORMAT24 else " " + timeformat)
     reset_time_format = "%H:%M" if timeformat == FORMAT24 else "%I:%M %p"
     reset_time = datetime.strptime(reset_time_str, reset_time_format)
-    reset_time = pytz.timezone(timezone).localize(reset_time)
+    
+    # Adds Timezone information to the object
+    reset_time = reset_time.replace(tzinfo=ZoneInfo(timezone))
+    
     now = datetime.now(pytz.utc)
     next_reset_time = reset_time.replace(year=now.year, month=now.month, day=now.day)
     if today != True and next_reset_time <= now:
@@ -263,27 +267,28 @@ def calculate_next_reset_epoch(resethour, timeformat, timezone, today):
 @tasks.loop(minutes=1)
 async def send_daily_message():
     for guild_id, reset_info in guild_reset_times.items():
-        reset_hour = reset_info["resethour"]
-        timezone = reset_info["timezone"]
-        timeformat = reset_info["timeformat"]
-        reset_epoch = calculate_next_reset_epoch(reset_hour, timeformat, timezone, True)
-        next_reset_time_str = f"<t:{reset_epoch}>"
-        
-        # this grabs the channel information to send the message
-        guild = bot.get_guild(int(guild_id))
-        if guild:
-            channel_id = guild_reset_times[guild_id]["channelid"]
-            channel = guild.get_channel(int(channel_id))
-            # if channel:
-            #     await channel.send(f"Testing: {next_reset_time_str}")
-        current_epoch = datetime.now().timestamp()
-        if current_epoch >= reset_epoch and current_epoch < reset_epoch + 60: # this is the normal reset logic for each day
-        # if current_epoch >= reset_epoch and (current_epoch - reset_epoch) % 3600 < 60: # this is an hourly tester
-            print("Matched!")
-            if channel:
-                next_reset_time_str = f"<t:{int(current_epoch)}>" # remove this for normal reset timestamp
-                day = datetime.now().strftime("%A")
-                await channel.send(embed=get_activity_message(day, False, next_reset_time_str))
+        if reset_info != None and reset_info != {}:
+            reset_hour = reset_info["resethour"]
+            timezone = reset_info["timezone"]
+            timeformat = reset_info["timeformat"]
+            reset_epoch = calculate_next_reset_epoch(reset_hour, timeformat, timezone, True)
+            next_reset_time_str = f"<t:{reset_epoch}>"
+            
+            # this grabs the channel information to send the message
+            guild = bot.get_guild(int(guild_id))
+            if guild:
+                channel_id = guild_reset_times[guild_id]["channelid"]
+                channel = guild.get_channel(int(channel_id))
+                # if channel:
+                #     await channel.send(f"Testing: {next_reset_time_str}")
+            current_epoch = datetime.now().timestamp()
+            if current_epoch >= reset_epoch and current_epoch < reset_epoch + 60: # this is the normal reset logic for each day
+            # if current_epoch >= reset_epoch and (current_epoch - reset_epoch) % 3600 < 60: # this is an hourly tester
+                print("Matched!")
+                if channel:
+                    next_reset_time_str = f"<t:{int(current_epoch)}>" # remove this for normal reset timestamp
+                    day = datetime.now().strftime("%A")
+                    await channel.send(embed=get_activity_message(day, False, next_reset_time_str))
 
 @send_daily_message.before_loop
 async def before_send_daily_message():
