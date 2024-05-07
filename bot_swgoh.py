@@ -1,4 +1,5 @@
 import os
+from lookupPlayer import get_guild_id, get_player_id_from_guild, get_player_ally_code_by_id
 from dotenv import load_dotenv
 import discord
 from discord import option
@@ -7,7 +8,9 @@ from datetime import datetime, timedelta
 import json
 import pytz
 from zoneinfo import ZoneInfo
+import requests
 
+# region Setup
 # Load environment variables from .env file
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -15,6 +18,8 @@ BOT_TOKEN = os.getenv('BOT_TOKEN')
 # GLOBALS
 RESET_MINUTE = "30" # ex. 10:{30} <-
 FORMAT24 = "Military"
+PREVIOUS_RANKS = None
+
 # Initialize the bot
 bot = discord.Bot()
 
@@ -49,7 +54,7 @@ activity_messages = {
         "Challenge Title":"Spend Light Side Energy",
         "HexColor": 0xfdc331,
         "Image URL": "https://swgoh.wiki/images/b/ba/Game-Icon-Energy.png",
-        "Before Guild Reset": ":zap: Spend Cantina Energy\n:bulb: Check Guild Tier and make sure you've spent enough\n:bulb: Save for ANY energy Activity in 2 days\n:arrows_counterclockwise: Buy 3 Refreshes of Normal Energy for next Activity",
+        "Before Guild Reset": "\n:bulb: Check Guild Tier and make sure you've spent enough\n:bulb: Save Cantina energy for ANY energy Activity in 2 days\n:arrows_counterclockwise: Buy 3 Refreshes of Normal Energy for next Activity",
         "After Guild Reset": ":zap: Spend Light Side Energy\n:checkered_flag: 1400 is the Goal\n:bulb: Spend all Energy and Bonuses\n:arrows_counterclockwise: 3 refreshes all on Light Side",
         "Footer": ""
     },
@@ -94,23 +99,24 @@ activity_messages = {
         "Footer": "Be aware of when your personal reset is so that you can use PvP attempts from both days that this activity covers"
     }
 }
+# endregion
 
-
+# region Helper Functions
 # Function to retrieve the activity message for the given day
 def get_activity_message(day, personalreset, next_reset_time_str = None, next_personal_reset_time_str = None):
+    next_day = list(activity_messages.keys())[(list(activity_messages.keys()).index(day) + 1) % len(activity_messages)]
     if personalreset:
-        activity_message = discord.Embed(title=f'{day} Personal Reset Guild Activity', color=activity_messages[day]['HexColor'], description=f"{activity_messages[day]['Challenge Title']}", url="https://swgoh.wiki/wiki/Guild_Activities")
+        activity_message = discord.Embed(title=f"{day} Personal Prep for {activity_messages[next_day]['Challenge Title']}", color=activity_messages[day]['HexColor'], url="https://swgoh.wiki/wiki/Guild_Activities")
 
         activity_message.add_field(name="Before Guild Reset Instructions", value=f"{activity_messages[day]['Before Guild Reset']}", inline=False)
 
         activity_message.add_field(name="After Guild Reset Instructions", value=f"{activity_messages[day]['After Guild Reset']}", inline=False)
     else:
-        activity_message = discord.Embed(title=f'{day} Guild Activity', color=activity_messages[day]['HexColor'], description=f"{activity_messages[day]['Challenge Title']}", url="https://swgoh.wiki/wiki/Guild_Activities")
+        activity_message = discord.Embed(title=f"{day} {activity_messages[day]['Challenge Title']}", color=activity_messages[day]['HexColor'], url="https://swgoh.wiki/wiki/Guild_Activities")
 
-        activity_message.add_field(name="Today's Instructions", value=f"{activity_messages[day]['After Guild Reset']}", inline=False)
+        activity_message.add_field(name=f"{activity_messages[day]['Challenge Title']}", value=f"{activity_messages[day]['After Guild Reset']}", inline=False)
 
-        next_day = list(activity_messages.keys())[(list(activity_messages.keys()).index(day) + 1) % len(activity_messages)]
-        activity_message.add_field(name="Preparation for Tomorrow", value=f"{activity_messages[next_day]['Before Guild Reset']}", inline=False)    
+        activity_message.add_field(name=f"Preparation for {activity_messages[next_day]['Challenge Title']}", value=f"{activity_messages[next_day]['Before Guild Reset']}", inline=False)    
     
     # Add thumbnail
     activity_message.set_thumbnail(url=activity_messages[day]['Image URL'])
@@ -127,6 +133,110 @@ def get_activity_message(day, personalreset, next_reset_time_str = None, next_pe
 
     return activity_message
 
+# Function to save guild reset times into JSON file
+def save_guild_reset_times():
+    with open("guild_reset_times.json", "w") as file:
+        json.dump(guild_reset_times, file)
+
+# Function to save guild reset times into JSON file
+def save_personal_reset_times():
+    with open("personal_reset_times.json", "w") as file:
+        json.dump(personal_reset_times, file)
+
+
+        
+# Fetch the list of valid timezones
+valid_timezones = list(pytz.all_timezones)
+
+# Function to provide hour options based on the selected time format
+async def get_hour_options(ctx: discord.AutocompleteContext):
+    time_format = ctx.options["timeformat"]
+    text = ctx.value
+    if time_format == 'Military':
+        return [str(i) for i in range(0, 24) if str(i).startswith(text)]
+    else:
+        return [str(i) for i in range(1, 13) if str(i).startswith(text)]
+    
+async def get_valid_timezones(ctx: discord.AutocompleteContext):
+    text = ctx.value
+    filtered_timezones = [timezone for timezone in valid_timezones if text.lower() in timezone.lower()]
+    if len(filtered_timezones) > 25:
+        return filtered_timezones[:25]
+    else:
+        return filtered_timezones
+    
+async def unsubscribe(ctx: discord.ApplicationContext):
+    # Clear the entry for the guild
+    guild_reset_times[str(ctx.guild_id)] = {}
+    
+    save_guild_reset_times()
+    await ctx.respond(f"User has been unsubscribed successfully.")
+
+# Function to calculate the next epoch time for the specified reset hour
+def calculate_next_reset_epoch(resethour, timeformat, timezone, dst, today, personal = False):
+    resetmin = "00" if personal else RESET_MINUTE
+    reset_time_str = f"{resethour}:" + resetmin + ("" if timeformat == FORMAT24 else " " + timeformat)
+    reset_time_format = "%H:%M" if timeformat == FORMAT24 else "%I:%M %p"
+    reset_time = datetime.strptime(reset_time_str, reset_time_format)
+    
+    # Adds Timezone information to the object
+    reset_time = reset_time.replace(tzinfo=ZoneInfo(timezone))
+
+    # If the guild's reset time was set during DST, check if DST is currently in effect
+    current_time = datetime.now(ZoneInfo(timezone))
+    is_currently_dst = current_time.dst() != timedelta(0)
+    if dst and not is_currently_dst:
+        reset_time -= timedelta(hours=1)
+    elif not dst and is_currently_dst:
+        reset_time += timedelta(hours=1)
+    
+    now = datetime.now(ZoneInfo(timezone))
+    next_reset_time = reset_time.replace(year=now.year, month=now.month, day=now.day)
+    if today != True and next_reset_time <= now:
+        next_reset_time += timedelta(days=1)
+    return next_reset_time
+
+def fetch_pvp_ranks():
+    url = 'http://localhost:5678/playerArena'
+    payload = {
+        "payload": {
+            "allyCode": "311527188"
+        }
+    }
+
+    response = requests.post(url, json=payload)
+    if response.status_code == 200:
+        pvp_profile = response.json().get('pvpProfile', [])
+        ranks = {entry['tab']: entry['rank'] for entry in pvp_profile}
+        return ranks
+    else:
+        print("Failed to fetch PvP ranks. Status code:", response.status_code)
+        return None
+    
+def display_rank_changes(current_ranks):
+    global PREVIOUS_RANKS  # Use the global variable
+    messages = []
+
+    if PREVIOUS_RANKS is not None and current_ranks is not None:
+        if 1 in PREVIOUS_RANKS and 1 in current_ranks:
+            squad_change = PREVIOUS_RANKS[1] - current_ranks[1]
+            if squad_change != 0:  # Check if there's a change
+                squad_emoji = ":chart_with_upwards_trend:" if squad_change > 0 else ":chart_with_downwards_trend:"
+                squad_color = 0x008000 if squad_change > 0 else 0xFF0000
+                squad_rank_message = discord.Embed(title=f'Squad Arena Logs', description=f"Rank {PREVIOUS_RANKS[1]} to {current_ranks[1]} (Diff: {abs(squad_change)} {squad_emoji})", color=squad_color)
+                messages.append(squad_rank_message)
+        if 2 in PREVIOUS_RANKS and 2 in current_ranks:
+            fleet_change = PREVIOUS_RANKS[2] - current_ranks[2]
+            if fleet_change != 0:  # Check if there's a change
+                fleet_emoji = ":chart_with_upwards_trend:" if fleet_change > 0 else ":chart_with_downwards_trend:"
+                fleet_color = 0x008000 if fleet_change > 0 else 0xFF0000
+                fleet_rank_message = discord.Embed(title="Fleet Arena Logs", description=f"Rank {PREVIOUS_RANKS[2]} to {current_ranks[2]} (Diff: {abs(fleet_change)} {fleet_emoji})", color=fleet_color)
+                messages.append(fleet_rank_message)
+        
+        return messages
+# endregion
+
+# region Slash Commands
 @bot.slash_command(
     name="activity",
     description="Prints today's activity message",
@@ -189,38 +299,6 @@ async def activity(ctx: discord.ApplicationContext, showall: bool = False, day: 
     
     # Send the activity message
     await ctx.respond(embed=activity_embed)
-
-# Function to save guild reset times into JSON file
-def save_guild_reset_times():
-    with open("guild_reset_times.json", "w") as file:
-        json.dump(guild_reset_times, file)
-
-# Function to save guild reset times into JSON file
-def save_personal_reset_times():
-    with open("personal_reset_times.json", "w") as file:
-        json.dump(personal_reset_times, file)
-
-
-        
-# Fetch the list of valid timezones
-valid_timezones = list(pytz.all_timezones)
-
-# Function to provide hour options based on the selected time format
-async def get_hour_options(ctx: discord.AutocompleteContext):
-    time_format = ctx.options["timeformat"]
-    text = ctx.value
-    if time_format == 'Military':
-        return [str(i) for i in range(0, 24) if str(i).startswith(text)]
-    else:
-        return [str(i) for i in range(1, 13) if str(i).startswith(text)]
-    
-async def get_valid_timezones(ctx: discord.AutocompleteContext):
-    text = ctx.value
-    filtered_timezones = [timezone for timezone in valid_timezones if text.lower() in timezone.lower()]
-    if len(filtered_timezones) > 25:
-        return filtered_timezones[:25]
-    else:
-        return filtered_timezones
 
 @bot.slash_command(
     name="register",
@@ -341,37 +419,38 @@ async def subscribe(ctx: discord.ApplicationContext, timezone: str, timeformat: 
     name="unsubscribe",
     description="Unsubscribe the user's reset time for sending the daily message",
 )
-async def unsubscribe(ctx: discord.ApplicationContext):
-    # Clear the entry for the guild
-    guild_reset_times[str(ctx.guild_id)] = {}
-    
-    save_guild_reset_times()
-    await ctx.respond(f"User has been unsubscribed successfully.")
 
-# Function to calculate the next epoch time for the specified reset hour
-def calculate_next_reset_epoch(resethour, timeformat, timezone, dst, today, personal = False):
-    resetmin = "00" if personal else RESET_MINUTE
-    reset_time_str = f"{resethour}:" + resetmin + ("" if timeformat == FORMAT24 else " " + timeformat)
-    reset_time_format = "%H:%M" if timeformat == FORMAT24 else "%I:%M %p"
-    reset_time = datetime.strptime(reset_time_str, reset_time_format)
-    
-    # Adds Timezone information to the object
-    reset_time = reset_time.replace(tzinfo=ZoneInfo(timezone))
+@bot.slash_command(
+        name="search",
+        description="Search for an ally code of a player given their guild and name"
+)
+@option(
+    "guild_name",
+    description="The exact name of their current guild.",
+    required=True
+)
+@option(
+    "player_name",
+    description="Their exact player name.",
+    required=True
+)
+async def search(ctx: discord.ApplicationContext, guild_name: str, player_name: str):
+    await ctx.defer()
+    guild_id = get_guild_id(guild_name)
+    if guild_id:
+        player_id = get_player_id_from_guild(guild_id, player_name)
+        if player_id:
+            ally_code = get_player_ally_code_by_id(player_id)
+            if ally_code:
+                print(f"Ally code for player {player_name}: {ally_code}")
+                await ctx.respond(f"Ally code for player {player_name}: {ally_code}")
+        else:
+            await ctx.respond("Failed to retrieve player's ally code.")
+    else:
+        await ctx.respond("Guild not found.")
+# endregion
 
-    # If the guild's reset time was set during DST, check if DST is currently in effect
-    current_time = datetime.now(ZoneInfo(timezone))
-    is_currently_dst = current_time.dst() != timedelta(0)
-    if dst and not is_currently_dst:
-        reset_time -= timedelta(hours=1)
-    elif not dst and is_currently_dst:
-        reset_time += timedelta(hours=1)
-    
-    now = datetime.now(ZoneInfo(timezone))
-    next_reset_time = reset_time.replace(year=now.year, month=now.month, day=now.day)
-    if today != True and next_reset_time <= now:
-        next_reset_time += timedelta(days=1)
-    return next_reset_time
-
+# region Looping Functions
 @tasks.loop(minutes=1)
 async def send_daily_message():
     for guild_id, reset_info in guild_reset_times.items():
@@ -415,7 +494,7 @@ async def send_daily_personal_message():
             # Check the guildid to see if we have its reset time to add to the card
             next_guild_reset_time_str = None
             if str(guildid) in guild_reset_times:
-                guildinfo = guild_reset_times[str(guildid)] 
+                guildinfo = guild_reset_times[str(guildid)]
                 if guildinfo != None and guildinfo != {}:
                     guild_reset_hour = guildinfo["resethour"]
                     guild_timezone = guildinfo["timezone"]
@@ -440,8 +519,23 @@ async def send_daily_personal_message():
                         day += timedelta(days=1)
                     
                     await user.send(embed=get_activity_message(day.strftime("%A"), True, next_guild_reset_time_str, next_reset_time_str))
-    
-                    
+
+@tasks.loop(minutes=1)
+async def check_pvp_ranks():   
+    current_ranks = fetch_pvp_ranks()
+    global PREVIOUS_RANKS  # Use the global variable
+    if current_ranks is not None:
+        if PREVIOUS_RANKS is None or current_ranks != PREVIOUS_RANKS:
+            messages = display_rank_changes(current_ranks)
+            PREVIOUS_RANKS = current_ranks
+
+            if messages is not None:
+                for message in messages:
+                    guild = bot.get_guild(int("618924061677846528"))
+                    if guild:
+                        channel_id = "1207898947755188246"
+                        channel = guild.get_channel(int(channel_id))
+                        await channel.send(embed=message)
 
 @send_daily_message.before_loop
 async def before_send_daily_message():
@@ -454,7 +548,16 @@ async def before_send_daily_personal_message():
     print("Configuring automated Personal messages...")
     await bot.wait_until_ready()
     print("Polling every minute to send daily Personal messages!")
+
+@check_pvp_ranks.before_loop
+async def before_check_pvp_ranks():
+    print("Configuring automated PvP Rank Checking...")
+    await bot.wait_until_ready()
+    print("Polling every minute to check PvP ranks!")
+# endregion
+
 # Run the bot
 send_daily_message.start()
 send_daily_personal_message.start()
+check_pvp_ranks.start()
 bot.run(BOT_TOKEN)
