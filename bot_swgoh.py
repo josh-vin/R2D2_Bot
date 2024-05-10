@@ -262,7 +262,92 @@ async def get_ally_code(guild_name: str, player_name: str):
             if ally_code:
                 return ally_code
     return None
+def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
+    arena_tab_num = 2 if arena_type == "fleetarena" else 1
+    ally_code = user_info.get("ally_code")
+    current_ranks, name = fetch_pvp_ranks(ally_code)
+    player_info_list = []
+    if current_ranks is not None:
+        # Compare current ranks with stored ranks
+        if user_info.get(arena_type, {}).get("rank") != current_ranks[arena_tab_num] or getAll:
+            previous_rank = ally_code_tracking[user_id][arena_type].get("previous_rank", ally_code_tracking[user_id][arena_type]["rank"]) if getAll else ally_code_tracking[user_id][arena_type]["rank"]
+            # Update stored ranks
+            ally_code_tracking[user_id][arena_type]["rank"] = current_ranks[arena_tab_num]
+            ally_code_tracking[user_id][arena_type]["previous_rank"] = previous_rank
             
+            # Save the updated settings into the JSON file
+            save_ally_code_tracking()
+
+            player_info = {
+                    "name": name,
+                    "rank": current_ranks[arena_tab_num],  # Current rank
+                    "previous_rank": previous_rank  # Previous rank
+            }
+            player_info_list.append(player_info)
+    for opponent in user_info.get(arena_type, {}).get("opponent_rank_tracking", []):
+            opponent_current_ranks, opponent_name = fetch_pvp_ranks(opponent["ally_code"])
+            if opponent_current_ranks is not None:
+                if opponent["rank"] != opponent_current_ranks[arena_tab_num] or getAll:
+                    opponent_previous_rank = opponent.get("previous_rank", opponent["rank"]) if getAll else opponent["rank"]
+                    # Update opponent's stored rank
+                    opponent["rank"] = opponent_current_ranks[arena_tab_num]
+                    opponent["previous_rank"] = opponent_previous_rank
+                    # Save the updated settings into the JSON file
+                    save_ally_code_tracking()
+                    
+                    # add player to list for generating messages
+                    player_info = {
+                        "name": opponent_name,
+                        "rank": opponent_current_ranks[arena_tab_num],  # Current rank
+                        "previous_rank": opponent_previous_rank  # Previous rank
+                    }
+                    player_info_list.append(player_info)
+    return player_info_list, name
+def get_rank_table(name, arena_string, sorted_player_info_list):
+    activity_message = discord.Embed(title=f"{name}'s {arena_string}", color=0xFFD700)
+    # Add fields for each player's rank, name, and change
+    rank_values = "\n".join(str(player["rank"]) for player in sorted_player_info_list)
+    name_values = "\n".join(player["name"] for player in sorted_player_info_list)
+    change_values = "\n".join("^" if player["rank"] < player["previous_rank"] else ("v" if player["rank"] > player["previous_rank"] else "-") for player in sorted_player_info_list)
+    activity_message.add_field(name="Rank", value=rank_values, inline=True)
+    activity_message.add_field(name="Name", value=name_values, inline=True)
+    activity_message.add_field(name="Change", value=change_values, inline=True)
+    return activity_message
+async def send_arena_monitoring_messages(user_id, user_info, arena_type: str):
+    arena_string = "Fleet Arena" if arena_type == "fleetarena" else "Squad Arena"
+    if user_info.get(arena_type, {}) and user_info.get(arena_type, {}).get("enabled") == True:
+        player_info_list, name = get_player_info(user_id, user_info, arena_type, False)
+        messages_to_send = []
+        
+        # Order the list of players by rank
+        sorted_player_info_list = sorted(player_info_list, key=lambda x: x["rank"])
+
+        # Determine how many players' ranks changed
+        num_rank_changes = sum(1 for player in sorted_player_info_list if player["rank"] != player["previous_rank"])
+
+        # Create a message based on the number of rank changes
+        if num_rank_changes == 1:
+            # Send message about rank change and append it to the list
+            for player in sorted_player_info_list:
+                if player["rank"] != player["previous_rank"]:
+                    message = display_rank_change(f"{name}'s {arena_string}", player["name"], player["previous_rank"],  player["rank"])
+                    if message is not None:
+                        messages_to_send.append(message)
+        elif num_rank_changes > 1:
+            # Create an embedded card
+            activity_message = get_rank_table(name, arena_string, sorted_player_info_list)
+            messages_to_send.append(activity_message)
+
+        # section for sending the actual messages
+        if user_info.get(arena_type, {}).get("guild_id") and user_info.get(arena_type, {}).get("channel_id"):
+            guild_id = user_info[arena_type]["guild_id"]
+            channel_id = user_info[arena_type]["channel_id"]
+            guild = bot.get_guild(int(guild_id))
+            if guild:
+                channel = guild.get_channel(int(channel_id))
+                for message in messages_to_send:
+                    await channel.send(embed=message)
+
 # endregion
 
 # region Slash Commands
@@ -597,6 +682,28 @@ async def add_player(ctx: discord.ApplicationContext, guild_name: str, player_na
             await ctx.respond(f"Failed to retrieve fleet rank for player {player_name}.")
     else:
         await ctx.respond(f"Ally code not found for player {player_name} in guild {guild_name}.")
+@fleetarena.command(
+    name="display",
+    description="Display fleet arena ranks",
+)
+async def display_fleet_arena(ctx: discord.ApplicationContext):
+    await ctx.defer()
+    arena_type = "fleetarena"
+    arena_string = "Fleet Arena"
+    user_id = str(ctx.user.id)
+    user_info = ally_code_tracking.get(user_id)
+    if user_info is not None and user_info != {} and user_info.get("ally_code") is not None:
+        if user_info.get(arena_type, {}) and user_info.get(arena_type, {}).get("enabled") == True:
+            player_info_list, name = get_player_info(user_id, user_info, arena_type, True)
+            
+            # Order the list of players by rank
+            sorted_player_info_list = sorted(player_info_list, key=lambda x: x["rank"])
+
+            activity_message = get_rank_table(name, arena_string, sorted_player_info_list)
+
+            await ctx.respond(embed=activity_message)
+    else: 
+        await ctx.respond(f"No user_info was found for <@{user_id}>")
 # endregion
 
 # region Squad Arena
@@ -747,73 +854,8 @@ async def send_daily_personal_message():
 async def check_pvp_ranks():   
     for user_id, user_info in ally_code_tracking.items():
         if user_info is not None and user_info != {} and user_info.get("ally_code") is not None:
-            ally_code = user_info.get("ally_code")
-            if user_info.get("fleetarena", {}) and user_info.get("fleetarena", {}).get("enabled") == True:
-                current_ranks, name = fetch_pvp_ranks(ally_code)
-                messages_to_send = []
-                if current_ranks is not None:
-                    # Compare current ranks with stored ranks
-                    if user_info.get("fleetarena", {}).get("rank") != current_ranks[2]:
-                        previous_rank = ally_code_tracking[user_id]["fleetarena"]["rank"]
-                        # Update stored ranks
-                        ally_code_tracking[user_id]["fleetarena"]["rank"] = current_ranks[2]
-                        
-                        # Save the updated settings into the JSON file
-                        save_ally_code_tracking()
-                        # Send message about rank change
-                        message = display_rank_change(f"{name}'s Fleet Arena", name, previous_rank, current_ranks[2])
-                        if message is not None:
-                            messages_to_send.append(message)
-                            # this grabs the channel information to send the message
-                        # Compare current ranks with stored ranks for each opponent
-                for opponent in user_info.get("fleetarena", {}).get("opponent_rank_tracking", []):
-                    opponent_current_ranks, opponent_name = fetch_pvp_ranks(opponent["ally_code"])
-                    if opponent_current_ranks is not None:
-                        if opponent["rank"] != opponent_current_ranks[2]:
-                            opponent_previous_rank = opponent["rank"]
-                            # Update opponent's stored rank
-                            opponent["rank"] = opponent_current_ranks[2]
-                            
-                            # Save the updated settings into the JSON file
-                            save_ally_code_tracking()
-
-                            # Send message about rank change and append it to the list
-                            message = display_rank_change(f"{name}'s Fleet Arena", opponent_name, opponent_previous_rank, opponent_current_ranks[2])
-                            if message is not None:
-                                messages_to_send.append(message)
-
-                if user_info.get("fleetarena", {}).get("guild_id") and user_info.get("fleetarena", {}).get("channel_id"):
-                    guild_id = user_info["fleetarena"]["guild_id"]
-                    channel_id = user_info["fleetarena"]["channel_id"]
-                    guild = bot.get_guild(int(guild_id))
-                    if guild:
-                        channel = guild.get_channel(int(channel_id))
-                        for message in messages_to_send:
-                            await channel.send(embed=message)
-            
-            if user_info.get("squadarena", {}) and user_info.get("squadarena", {}).get("enabled") == True:
-                current_ranks, name = fetch_pvp_ranks(ally_code)
-                if current_ranks is not None:
-                    # Compare current ranks with stored ranks
-                    if user_info.get("squadarena", {}).get("rank") != current_ranks[1]:
-                        previous_rank = ally_code_tracking[user_id]["squadarena"]["rank"]
-                        # Update stored ranks
-                        ally_code_tracking[user_id]["squadarena"]["rank"] = current_ranks[1]
-                        
-                        # Send message about rank change
-                        message = display_rank_change(f'{name}\'s Squad Arena', name, previous_rank, current_ranks[1])
-                        # Save the updated settings into the JSON file
-                        save_ally_code_tracking()
-
-                        if message is not None:
-                            # this grabs the channel information to send the message
-                            if user_info.get("squadarena", {}).get("guild_id") and user_info.get("squadarena", {}).get("channel_id"):
-                                guild_id = user_info["squadarena"]["guild_id"]
-                                channel_id = user_info["squadarena"]["channel_id"]
-                                guild = bot.get_guild(int(guild_id))
-                                if guild:
-                                    channel = guild.get_channel(int(channel_id))
-                                    await channel.send(embed=message)
+            await send_arena_monitoring_messages(user_id, user_info, "fleetarena")
+            await send_arena_monitoring_messages(user_id, user_info, "squadarena")
 
 @send_daily_message.before_loop
 async def before_send_daily_message():
