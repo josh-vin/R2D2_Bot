@@ -32,3 +32,8 @@ guild_ids=[GUILD_ID]
 This will make it register fast when you are wanting to test. 
 
 It may take time for it to propagate to the other servers
+
+## Reference to py-cord library
+This is the website I find most useful when trying to do different things with Py-Cord
+
+https://guide.pycord.dev/introduction

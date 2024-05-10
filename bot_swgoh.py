@@ -36,6 +36,12 @@ try:
 except FileNotFoundError:
     guild_reset_times = {}
 
+try:
+    with open("ally_code_tracking.json", "r") as file:
+        ally_code_tracking = json.load(file)
+except FileNotFoundError:
+    guild_reset_times = {}
+
 @bot.event
 async def on_ready():
     print(f"{bot.user} is ready and online!")
@@ -143,6 +149,9 @@ def save_personal_reset_times():
     with open("personal_reset_times.json", "w") as file:
         json.dump(personal_reset_times, file)
 
+def save_ally_code_tracking():
+    with open("ally_code_tracking.json", "w") as file:
+        json.dump(ally_code_tracking, file)
 
         
 # Fetch the list of valid timezones
@@ -196,19 +205,20 @@ def calculate_next_reset_epoch(resethour, timeformat, timezone, dst, today, pers
         next_reset_time += timedelta(days=1)
     return next_reset_time
 
-def fetch_pvp_ranks():
+def fetch_pvp_ranks(ally_code: str):
     url = 'http://localhost:5678/playerArena'
     payload = {
         "payload": {
-            "allyCode": "311527188"
+            "allyCode": ally_code
         }
     }
 
     response = requests.post(url, json=payload)
     if response.status_code == 200:
         pvp_profile = response.json().get('pvpProfile', [])
+        name = response.json().get('name', "")
         ranks = {entry['tab']: entry['rank'] for entry in pvp_profile}
-        return ranks
+        return ranks, name
     else:
         print("Failed to fetch PvP ranks. Status code:", response.status_code)
         return None
@@ -234,9 +244,29 @@ def display_rank_changes(current_ranks):
                 messages.append(fleet_rank_message)
         
         return messages
+    
+def display_rank_change(title, name, previous_rank, new_rank):
+    if previous_rank is not None and new_rank is not None:
+        change = previous_rank - new_rank
+        if change != 0:  # Check if there's a change
+            emoji = ":chart_with_upwards_trend:" if change > 0 else ":chart_with_downwards_trend:"
+            color = 0x008000 if change > 0 else 0xFF0000
+            return discord.Embed(title=title, description=f"{name}: Rank {previous_rank} to {new_rank} (Diff: {abs(change)} {emoji})", color=color)
+        
+async def get_ally_code(guild_name: str, player_name: str):
+    guild_id = get_guild_id(guild_name)
+    if guild_id:
+        player_id = get_player_id_from_guild(guild_id, player_name)
+        if player_id:
+            ally_code = get_player_ally_code_by_id(player_id)
+            if ally_code:
+                return ally_code
+    return None
+            
 # endregion
 
 # region Slash Commands
+# region Acitivty Commands
 @bot.slash_command(
     name="activity",
     description="Prints today's activity message",
@@ -419,7 +449,9 @@ async def subscribe(ctx: discord.ApplicationContext, timezone: str, timeformat: 
     name="unsubscribe",
     description="Unsubscribe the user's reset time for sending the daily message",
 )
+# endregion
 
+# region Utility Commands
 @bot.slash_command(
         name="search",
         description="Search for an ally code of a player given their guild and name"
@@ -436,18 +468,209 @@ async def subscribe(ctx: discord.ApplicationContext, timezone: str, timeformat: 
 )
 async def search(ctx: discord.ApplicationContext, guild_name: str, player_name: str):
     await ctx.defer()
-    guild_id = get_guild_id(guild_name)
-    if guild_id:
-        player_id = get_player_id_from_guild(guild_id, player_name)
-        if player_id:
-            ally_code = get_player_ally_code_by_id(player_id)
-            if ally_code:
-                print(f"Ally code for player {player_name}: {ally_code}")
-                await ctx.respond(f"Ally code for player {player_name}: {ally_code}")
-        else:
-            await ctx.respond("Failed to retrieve player's ally code.")
+
+    ally_code = await get_ally_code(guild_name, player_name)
+    if ally_code:
+        await ctx.respond(f"Ally code for player {player_name}: {ally_code}")
     else:
-        await ctx.respond("Guild not found.")
+        await ctx.respond("Failed to retrieve player's ally code.")
+# endregion
+
+# region PvP Tracking
+# region Fleet Arena
+# create Slash Command group with bot.create_group
+fleetarena = bot.create_group("fleetarena", "Fleet Arena tracking", guild_ids=["618924061677846528"])
+@fleetarena.command(
+    name="enable",
+    description="Enable fleet arena rank monitoring",
+)
+@option(
+    "ally_code",
+    description="Add your ally code XXXXXXXXX",
+    required=False
+)
+async def enable(ctx: discord.ApplicationContext, ally_code: str):
+    await ctx.defer()
+
+    # Check if an ally code is provided as an option
+    
+    user_id = str(ctx.user.id)
+    # Check if the user's ID already exists in the dictionary
+    if user_id not in ally_code_tracking:
+        # If not, create a new entry for the user
+        ally_code_tracking[user_id] = {}
+
+    if ally_code is not None:
+        ally_code_tracking[user_id]["ally_code"] = ally_code
+    else:
+        # Check if the user already has an ally code registered
+        if ally_code_tracking.get(user_id) and ally_code_tracking[user_id].get("ally_code"):
+            ally_code = ally_code_tracking[user_id]["ally_code"]
+        else:
+            await ctx.respond("Please /register your ally code...")
+            return
+
+    ranks_result, name = fetch_pvp_ranks(ally_code)
+
+    fleetarena_settings = {
+        "guild_id": ctx.guild_id,
+        "channel_id": ctx.channel_id,
+        "enabled": True,
+        "rank": ranks_result[2],
+        "opponent_rank_tracking": []  # Initialize empty list for tracking
+    }
+
+    # Update the fleet arena monitoring settings for the user in the JSON file
+    user_id = str(ctx.user.id)
+    ally_code_tracking[user_id]["fleetarena"] = fleetarena_settings
+    
+    # Save the updated settings into the JSON file
+    save_ally_code_tracking()
+
+    await ctx.respond(f'Fleet arena monitoring has been enabled successfully for `{name}` at Rank `{ranks_result[2]}`!')
+
+@fleetarena.command(
+    name="disable",
+    description="Disable fleet arena rank monitoring",
+)
+async def disable_fleet_arena(ctx: discord.ApplicationContext):
+    await ctx.defer()
+
+    user_id = str(ctx.user.id)
+    if user_id not in ally_code_tracking or "fleetarena" not in ally_code_tracking[user_id]:
+        await ctx.respond("Fleet arena monitoring is not enabled for you.")
+        return
+
+    ally_code_tracking[user_id]["fleetarena"]["enabled"] = False
+    save_ally_code_tracking()
+
+    await ctx.respond("Fleet arena monitoring has been disabled successfully!")
+
+@fleetarena.command(
+    name="add",
+    description="Add a player to fleet arena rank monitoring",
+    guild_ids=["618924061677846528"]
+)
+@option(
+    "guild_name",
+    description="Guild name",
+    required=True
+)
+@option(
+    "player_name",
+    description="Player name",
+    required=True
+)
+async def add_player(ctx: discord.ApplicationContext, guild_name: str, player_name: str):
+    await ctx.defer()
+
+    # Get the ally code for the player
+    ally_code = await get_ally_code(guild_name, player_name)
+    if ally_code:
+        # Retrieve the fleet rank from the player's PvP profile
+        ranks_result, _ = fetch_pvp_ranks(ally_code)
+        fleet_rank = ranks_result.get(2)
+        if fleet_rank:
+            user_id = str(ctx.user.id)
+            opponent = {
+                "ally_code": ally_code,
+                "rank": fleet_rank
+            }
+
+            # Update the opponent_rank_tracking for the user in the JSON file
+            if user_id not in ally_code_tracking:
+                ally_code_tracking[user_id] = {}
+            if "fleetarena" not in ally_code_tracking[user_id]:
+                ally_code_tracking[user_id]["fleetarena"] = {
+                    "guild_id": ctx.guild_id,
+                    "channel_id": ctx.channel_id,
+                    "enabled": True,
+                    "opponent_rank_tracking": []  # Initialize empty list for tracking
+                }
+            ally_code_tracking[user_id]["fleetarena"]["opponent_rank_tracking"].append(opponent)
+
+            # Save the updated settings into the JSON file
+            save_ally_code_tracking()
+
+            await ctx.respond(f'Player {player_name} from guild {guild_name} added successfully to fleet arena tracking at Rank {fleet_rank}!')
+        else:
+            await ctx.respond(f"Failed to retrieve fleet rank for player {player_name}.")
+    else:
+        await ctx.respond(f"Ally code not found for player {player_name} in guild {guild_name}.")
+# endregion
+
+# region Squad Arena
+# create Slash Command group with bot.create_group
+squadarena = bot.create_group("squadarena", "Squad Arena tracking", guild_ids=["618924061677846528"])
+@squadarena.command(
+    name="enable",
+    description="Enable squad arena rank monitoring",
+    guild_ids=["618924061677846528"]
+)
+@option(
+    "ally_code",
+    description="Add your ally code XXXXXXXXX",
+    required=False
+)
+async def enable(ctx: discord.ApplicationContext, ally_code: str):
+    await ctx.defer()
+
+    # Check if an ally code is provided as an option
+    
+    user_id = str(ctx.user.id)
+    # Check if the user's ID already exists in the dictionary
+    if user_id not in ally_code_tracking:
+        # If not, create a new entry for the user
+        ally_code_tracking[user_id] = {}
+
+    if ally_code is not None:
+        ally_code_tracking[user_id]["ally_code"] = ally_code
+    else:
+        # Check if the user already has an ally code registered
+        if ally_code_tracking.get(user_id) and ally_code_tracking[user_id].get("ally_code"):
+            ally_code = ally_code_tracking[user_id]["ally_code"]
+        else:
+            await ctx.respond("Please /register your ally code...")
+            return
+
+    ranks_result, name = fetch_pvp_ranks(ally_code)
+
+    squadarena_settings = {
+        "guild_id": ctx.guild_id,
+        "channel_id": ctx.channel_id,
+        "enabled": True,
+        "rank": ranks_result[1],
+        "opponent_rank_tracking": []  # Initialize empty list for tracking
+    }
+
+    # Update the fleet arena monitoring settings for the user in the JSON file
+    user_id = str(ctx.user.id)
+    ally_code_tracking[user_id]["squadarena"] = squadarena_settings
+    
+    # Save the updated settings into the JSON file
+    save_ally_code_tracking()
+
+    await ctx.respond(f'Squad arena monitoring has been enabled successfully for `{name}` at Rank `{ranks_result[1]}`!')
+
+@squadarena.command(
+    name="disable",
+    description="Disable squad arena rank monitoring",
+)
+async def disable_squad_arena(ctx: discord.ApplicationContext):
+    await ctx.defer()
+
+    user_id = str(ctx.user.id)
+    if user_id not in ally_code_tracking or "squadarena" not in ally_code_tracking[user_id]:
+        await ctx.respond("Squad arena monitoring is not enabled for you.")
+        return
+
+    ally_code_tracking[user_id]["squadarena"]["enabled"] = False
+    save_ally_code_tracking()
+
+    await ctx.respond("Squad arena monitoring has been disabled successfully!")
+# endregion
+# endregion
+
 # endregion
 
 # region Looping Functions
@@ -522,20 +745,75 @@ async def send_daily_personal_message():
 
 @tasks.loop(minutes=1)
 async def check_pvp_ranks():   
-    current_ranks = fetch_pvp_ranks()
-    global PREVIOUS_RANKS  # Use the global variable
-    if current_ranks is not None:
-        if PREVIOUS_RANKS is None or current_ranks != PREVIOUS_RANKS:
-            messages = display_rank_changes(current_ranks)
-            PREVIOUS_RANKS = current_ranks
+    for user_id, user_info in ally_code_tracking.items():
+        if user_info is not None and user_info != {} and user_info.get("ally_code") is not None:
+            ally_code = user_info.get("ally_code")
+            if user_info.get("fleetarena", {}) and user_info.get("fleetarena", {}).get("enabled") == True:
+                current_ranks, name = fetch_pvp_ranks(ally_code)
+                messages_to_send = []
+                if current_ranks is not None:
+                    # Compare current ranks with stored ranks
+                    if user_info.get("fleetarena", {}).get("rank") != current_ranks[2]:
+                        previous_rank = ally_code_tracking[user_id]["fleetarena"]["rank"]
+                        # Update stored ranks
+                        ally_code_tracking[user_id]["fleetarena"]["rank"] = current_ranks[2]
+                        
+                        # Save the updated settings into the JSON file
+                        save_ally_code_tracking()
+                        # Send message about rank change
+                        message = display_rank_change(f"{name}'s Fleet Arena", name, previous_rank, current_ranks[2])
+                        if message is not None:
+                            messages_to_send.append(message)
+                            # this grabs the channel information to send the message
+                        # Compare current ranks with stored ranks for each opponent
+                for opponent in user_info.get("fleetarena", {}).get("opponent_rank_tracking", []):
+                    opponent_current_ranks, opponent_name = fetch_pvp_ranks(opponent["ally_code"])
+                    if opponent_current_ranks is not None:
+                        if opponent["rank"] != opponent_current_ranks[2]:
+                            opponent_previous_rank = opponent["rank"]
+                            # Update opponent's stored rank
+                            opponent["rank"] = opponent_current_ranks[2]
+                            
+                            # Save the updated settings into the JSON file
+                            save_ally_code_tracking()
 
-            if messages is not None:
-                for message in messages:
-                    guild = bot.get_guild(int("618924061677846528"))
+                            # Send message about rank change and append it to the list
+                            message = display_rank_change(f"{name}'s Fleet Arena", opponent_name, opponent_previous_rank, opponent_current_ranks[2])
+                            if message is not None:
+                                messages_to_send.append(message)
+
+                if user_info.get("fleetarena", {}).get("guild_id") and user_info.get("fleetarena", {}).get("channel_id"):
+                    guild_id = user_info["fleetarena"]["guild_id"]
+                    channel_id = user_info["fleetarena"]["channel_id"]
+                    guild = bot.get_guild(int(guild_id))
                     if guild:
-                        channel_id = "1207898947755188246"
                         channel = guild.get_channel(int(channel_id))
-                        await channel.send(embed=message)
+                        for message in messages_to_send:
+                            await channel.send(embed=message)
+            
+            if user_info.get("squadarena", {}) and user_info.get("squadarena", {}).get("enabled") == True:
+                current_ranks, name = fetch_pvp_ranks(ally_code)
+                if current_ranks is not None:
+                    # Compare current ranks with stored ranks
+                    if user_info.get("squadarena", {}).get("rank") != current_ranks[1]:
+                        previous_rank = ally_code_tracking[user_id]["squadarena"]["rank"]
+                        # Update stored ranks
+                        ally_code_tracking[user_id]["squadarena"]["rank"] = current_ranks[1]
+                        
+                        # Send message about rank change
+                        message = display_rank_change(f'{name}\'s Squad Arena', name, previous_rank, current_ranks[1])
+                        # Save the updated settings into the JSON file
+                        save_ally_code_tracking()
+
+                        if message is not None:
+                            # this grabs the channel information to send the message
+                            if user_info.get("squadarena", {}).get("guild_id") and user_info.get("squadarena", {}).get("channel_id"):
+                                guild_id = user_info["squadarena"]["guild_id"]
+                                channel_id = user_info["squadarena"]["channel_id"]
+                                guild = bot.get_guild(int(guild_id))
+                                if guild:
+                                    channel = guild.get_channel(int(channel_id))
+                                    await channel.send(embed=message)
 
 @send_daily_message.before_loop
 async def before_send_daily_message():
