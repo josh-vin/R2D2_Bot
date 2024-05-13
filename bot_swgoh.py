@@ -9,6 +9,7 @@ import json
 import pytz
 from zoneinfo import ZoneInfo
 import requests
+import re
 
 # region Setup
 # Load environment variables from .env file
@@ -20,8 +21,9 @@ RESET_MINUTE = "30" # ex. 10:{30} <-
 FORMAT24 = "Military"
 PREVIOUS_RANKS = None
 
-# Initialize the bot
-bot = discord.Bot()
+# You cannot monitor "onMessage" without ALL intents and setting ALL intents on your discord bot in the dev settings
+intents = discord.Intents.all()
+bot = discord.Bot(intents=intents)
 
 # Load guild reset times from JSON file on bot startup
 try:
@@ -41,6 +43,12 @@ try:
         ally_code_tracking = json.load(file)
 except FileNotFoundError:
     guild_reset_times = {}
+
+try:
+    with open("channels.json", "r") as file:
+        channels = json.load(file)
+except FileNotFoundError:
+    channels = {}
 
 @bot.event
 async def on_ready():
@@ -112,7 +120,7 @@ activity_messages = {
 def get_activity_message(day, personalreset, next_reset_time_str = None, next_personal_reset_time_str = None):
     next_day = list(activity_messages.keys())[(list(activity_messages.keys()).index(day) + 1) % len(activity_messages)]
     if personalreset:
-        activity_message = discord.Embed(title=f"{day} Personal Prep for {activity_messages[next_day]['Challenge Title']}", color=activity_messages[day]['HexColor'], url="https://swgoh.wiki/wiki/Guild_Activities")
+        activity_message = discord.Embed(title=f"{day} Personal Prep for {activity_messages[day]['Challenge Title']}", color=activity_messages[day]['HexColor'], url="https://swgoh.wiki/wiki/Guild_Activities")
 
         activity_message.add_field(name="Before Guild Reset Instructions", value=f"{activity_messages[day]['Before Guild Reset']}", inline=False)
 
@@ -152,6 +160,10 @@ def save_personal_reset_times():
 def save_ally_code_tracking():
     with open("ally_code_tracking.json", "w") as file:
         json.dump(ally_code_tracking, file)
+
+def save_channels():
+    with open("channels.json", "w") as file:
+        json.dump(channels, file)
 
         
 # Fetch the list of valid timezones
@@ -244,7 +256,8 @@ def display_rank_changes(current_ranks):
                 messages.append(fleet_rank_message)
         
         return messages
-    
+    return None
+
 def display_rank_change(title, name, previous_rank, new_rank):
     if previous_rank is not None and new_rank is not None:
         change = previous_rank - new_rank
@@ -252,9 +265,10 @@ def display_rank_change(title, name, previous_rank, new_rank):
             emoji = ":chart_with_upwards_trend:" if change > 0 else ":chart_with_downwards_trend:"
             color = 0x008000 if change > 0 else 0xFF0000
             return discord.Embed(title=title, description=f"{name}: Rank {previous_rank} to {new_rank} (Diff: {abs(change)} {emoji})", color=color)
+    return None
         
 async def get_ally_code(guild_name: str, player_name: str):
-    guild_id = get_guild_id(guild_name)
+    guild_id, member_count = get_guild_id(guild_name)
     if guild_id:
         player_id = get_player_id_from_guild(guild_id, player_name)
         if player_id:
@@ -262,6 +276,7 @@ async def get_ally_code(guild_name: str, player_name: str):
             if ally_code:
                 return ally_code
     return None
+
 def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
     arena_tab_num = 2 if arena_type == "fleetarena" else 1
     ally_code = user_info.get("ally_code")
@@ -284,6 +299,7 @@ def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
                     "previous_rank": previous_rank  # Previous rank
             }
             player_info_list.append(player_info)
+
     for opponent in user_info.get(arena_type, {}).get("opponent_rank_tracking", []):
             opponent_current_ranks, opponent_name = fetch_pvp_ranks(opponent["ally_code"])
             if opponent_current_ranks is not None:
@@ -302,17 +318,30 @@ def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
                         "previous_rank": opponent_previous_rank  # Previous rank
                     }
                     player_info_list.append(player_info)
+
     return player_info_list, name
+
 def get_rank_table(name, arena_string, sorted_player_info_list):
-    activity_message = discord.Embed(title=f"{name}'s {arena_string}", color=0xFFD700)
     # Add fields for each player's rank, name, and change
-    rank_values = "\n".join(str(player["rank"]) for player in sorted_player_info_list)
-    name_values = "\n".join(player["name"] for player in sorted_player_info_list)
-    change_values = "\n".join("^" if player["rank"] < player["previous_rank"] else ("v" if player["rank"] > player["previous_rank"] else "-") for player in sorted_player_info_list)
-    activity_message.add_field(name="Rank", value=rank_values, inline=True)
-    activity_message.add_field(name="Name", value=name_values, inline=True)
-    activity_message.add_field(name="Change", value=change_values, inline=True)
-    return activity_message
+    # rank_values = "\n".join(str(player["rank"]) for player in sorted_player_info_list)
+    # name_values = "\n".join(player["name"] for player in sorted_player_info_list)
+    # change_values = "\n".join("^" if player["rank"] < player["previous_rank"] else ("v" if player["rank"] > player["previous_rank"] else "-") for player in sorted_player_info_list)
+    # activity_message.add_field(name="Rank", value=rank_values, inline=True)
+    # activity_message.add_field(name="Name", value=name_values, inline=True)
+    # activity_message.add_field(name="Change", value=change_values, inline=True)
+    # Prepare the header of the table
+    table = ["`Rank   Name             Change`"]
+
+    # Iterate over players and format each line
+    for player in sorted_player_info_list:
+        change = ":green_circle:" if player["rank"] < player["previous_rank"] else (":red_circle:" if player["rank"] > player["previous_rank"] else ":blue_circle:")
+        line = "`{:<6} {:<16} `{:<10}`   `".format(player["rank"], player["name"], change)
+        table.append(line)
+    
+    table.append("`{:<6} {:<16} {:<6}`".format("","",""))
+    rank_table = discord.Embed(title=f"{name}'s {arena_string}", color=0xFFD700, description="\n".join(table))
+    return rank_table
+
 async def send_arena_monitoring_messages(user_id, user_info, arena_type: str):
     arena_string = "Fleet Arena" if arena_type == "fleetarena" else "Squad Arena"
     if user_info.get(arena_type, {}) and user_info.get(arena_type, {}).get("enabled") == True:
@@ -347,6 +376,7 @@ async def send_arena_monitoring_messages(user_id, user_info, arena_type: str):
                 channel = guild.get_channel(int(channel_id))
                 for message in messages_to_send:
                     await channel.send(embed=message)
+    return
 
 # endregion
 
@@ -559,6 +589,37 @@ async def search(ctx: discord.ApplicationContext, guild_name: str, player_name: 
         await ctx.respond(f"Ally code for player {player_name}: {ally_code}")
     else:
         await ctx.respond("Failed to retrieve player's ally code.")
+
+@bot.slash_command(
+        name="monitor",
+        description="Monitor channel's messages",
+        guild_ids = ["618924061677846528", "1186439503183892580"]
+)
+async def monitor(ctx: discord.ApplicationContext):
+    await ctx.defer()
+    if ctx.channel_id not in channels:
+        channels.append(ctx.channel_id)
+        save_channels()
+
+        await ctx.respond(f"Now monitoring messages for channel <#{ctx.channel_id}>")
+    else:
+        await ctx.respond(f"Messages are already being monitored for channel <#{ctx.channel_id}>")
+
+@bot.slash_command(
+        name="unmonitor",
+        description="Unmonitor channel's messages",
+        guild_ids = ["618924061677846528", "1186439503183892580"]
+)
+async def monitor(ctx: discord.ApplicationContext):
+    await ctx.defer()
+
+    if ctx.channel_id in channels:
+        channels.remove(ctx.channel_id)
+        save_channels()
+
+        await ctx.respond(f"No longer monitoring messages for channel <#{ctx.channel_id}>")
+    else:
+        await ctx.respond(f"Messages were not being monitored for channel <#{ctx.channel_id}>")
 # endregion
 
 # region PvP Tracking
@@ -654,40 +715,44 @@ async def add_player(ctx: discord.ApplicationContext, guild_name: str, player_na
     if ally_code:
         # Retrieve the fleet rank from the player's PvP profile
         ranks_result, _ = fetch_pvp_ranks(ally_code)
-        fleet_rank = ranks_result.get(2)
-        if fleet_rank:
-            user_id = str(ctx.user.id)
-            opponent = {
-                "ally_code": ally_code,
-                "rank": fleet_rank
-            }
-
-            # Update the opponent_rank_tracking for the user in the JSON file
-            if user_id not in ally_code_tracking:
-                ally_code_tracking[user_id] = {}
-            if "fleetarena" not in ally_code_tracking[user_id]:
-                ally_code_tracking[user_id]["fleetarena"] = {
-                    "guild_id": ctx.guild_id,
-                    "channel_id": ctx.channel_id,
-                    "enabled": True,
-                    "opponent_rank_tracking": []  # Initialize empty list for tracking
+        if ranks_result is not None:
+            fleet_rank = ranks_result.get(2)
+            if fleet_rank:
+                user_id = str(ctx.user.id)
+                opponent = {
+                    "ally_code": ally_code,
+                    "rank": fleet_rank,
+                    "previous_rank": fleet_rank
                 }
-            ally_code_tracking[user_id]["fleetarena"]["opponent_rank_tracking"].append(opponent)
 
-            # Save the updated settings into the JSON file
-            save_ally_code_tracking()
+                # Update the opponent_rank_tracking for the user in the JSON file
+                if user_id not in ally_code_tracking:
+                    ally_code_tracking[user_id] = {}
+                if "fleetarena" not in ally_code_tracking[user_id]:
+                    ally_code_tracking[user_id]["fleetarena"] = {
+                        "guild_id": ctx.guild_id,
+                        "channel_id": ctx.channel_id,
+                        "enabled": True,
+                        "opponent_rank_tracking": []  # Initialize empty list for tracking
+                    }
+                ally_code_tracking[user_id]["fleetarena"]["opponent_rank_tracking"].append(opponent)
 
-            await ctx.respond(f'Player {player_name} from guild {guild_name} added successfully to fleet arena tracking at Rank {fleet_rank}!')
+                # Save the updated settings into the JSON file
+                save_ally_code_tracking()
+
+                await ctx.respond(f'Player {player_name} from guild {guild_name} added successfully to fleet arena tracking at Rank {fleet_rank}!')
         else:
             await ctx.respond(f"Failed to retrieve fleet rank for player {player_name}.")
     else:
         await ctx.respond(f"Ally code not found for player {player_name} in guild {guild_name}.")
+    return
+
 @fleetarena.command(
     name="display",
     description="Display fleet arena ranks",
 )
 async def display_fleet_arena(ctx: discord.ApplicationContext):
-    await ctx.defer()
+    # await ctx.defer()
     arena_type = "fleetarena"
     arena_string = "Fleet Arena"
     user_id = str(ctx.user.id)
@@ -700,10 +765,14 @@ async def display_fleet_arena(ctx: discord.ApplicationContext):
             sorted_player_info_list = sorted(player_info_list, key=lambda x: x["rank"])
 
             activity_message = get_rank_table(name, arena_string, sorted_player_info_list)
-
-            await ctx.respond(embed=activity_message)
+            if activity_message is not None:
+                await ctx.respond(embed=activity_message)
+            else:
+                await ctx.respond(f"Could not find rank table for <@{user_id}>")
     else: 
         await ctx.respond(f"No user_info was found for <@{user_id}>")
+    return  
+
 # endregion
 
 # region Squad Arena
@@ -758,6 +827,7 @@ async def enable(ctx: discord.ApplicationContext, ally_code: str):
     save_ally_code_tracking()
 
     await ctx.respond(f'Squad arena monitoring has been enabled successfully for `{name}` at Rank `{ranks_result[1]}`!')
+    return
 
 @squadarena.command(
     name="disable",
@@ -874,7 +944,68 @@ async def before_check_pvp_ranks():
     print("Configuring automated PvP Rank Checking...")
     await bot.wait_until_ready()
     print("Polling every minute to check PvP ranks!")
+
 # endregion
+
+def parse_ticket_message(message, monitorAll: bool):
+    # Regular expression pattern to match the expected format
+    total_members_missed = 0
+    total_tickets_missed = 0
+    
+    if monitorAll:
+        pattern = r'\b\w+\s+\(.*(\d+).*/600\)'
+        matches = re.findall(pattern, message)
+
+        total_members_missed = len(matches)
+
+        # Iterate over matches and calculate total and missing tickets
+        for tickets in matches:
+            if int(tickets) < 600:
+                total_tickets_missed += 600 - int(tickets)
+    else:
+        pattern = r".*Below are the members that missed the 600 ticket mark. Discipline as you must!\n(.*)" # This hotbot message is customizable per guild settings
+        
+        # Search for the pattern in the message
+        match = re.search(pattern, message, re.DOTALL)
+        
+        if match:
+            # Get the list of members and their ticket counts
+            member_lines = match.group(1).split('\n')
+            # Initialize counters
+            
+            # Iterate over each member line
+            for line in member_lines:
+                # Extract member name and ticket count using regular expression
+                member_match = re.match(r"^\s*(.*?)\s+\(.*(\d+).*/600\)$", line)
+                if member_match:
+                    # Increment counters
+                    total_members_missed += 1
+                    total_tickets_missed += 600 - int(member_match.group(2))
+        else:
+            return None, None
+
+    return total_members_missed, total_tickets_missed
+
+
+@bot.event
+async def on_message(message):
+    if message.author == bot.user: # skip own messages
+            return
+    
+    if message.channel.id in channels:
+        total_members_missed, total_tickets_missed = parse_ticket_message(message.content, False)
+        member_message = ""
+        if total_members_missed is not None and total_members_missed > 0:
+            # I also want to check if the guild that has monitoring enabled has a guild name in our json so I can check their members
+            guildname = guild_reset_times[str(message.guild.id)]["guildname"]
+            if guildname is not None:
+                id, member_count = get_guild_id(guildname)
+                if member_count is not None and member_count > 0:
+                    member_message = f"\nTotal members in Guild: `{member_count}/50`\n**Total Tickets missing**: `{total_tickets_missed + (50 - member_count) * 600}`"
+            description = f"Total Members missing tickets: `{total_members_missed}`\nMember Tickets missing: `{total_tickets_missed}`{member_message}"
+            response = discord.Embed(title="Ticket Summary", color=0xFF0000, description=description)
+            await message.channel.send(embed=response, reference=message)
+    
 
 # Run the bot
 send_daily_message.start()

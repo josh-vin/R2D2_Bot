@@ -162,3 +162,5 @@ cython_debug/
 guild_reset_times.json
 personal_reset_times.json
 ally_code_tracking.json
+
+channels.json

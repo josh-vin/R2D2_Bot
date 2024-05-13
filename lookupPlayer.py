@@ -18,7 +18,7 @@ def get_guild_id(guild_name):
         guild_data = response.json().get('guild', [])
         for guild in guild_data:
             if guild['name'] == guild_name:
-                return guild['id']
+                return guild['id'], guild['memberCount']
         else:
             print("Guild not found.")
             return None
