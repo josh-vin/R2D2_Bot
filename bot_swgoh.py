@@ -10,6 +10,7 @@ import pytz
 from zoneinfo import ZoneInfo
 import requests
 import re
+import asyncio
 
 # region Setup
 # Load environment variables from .env file
@@ -619,6 +620,258 @@ async def unmonitor(ctx: discord.ApplicationContext):
         await ctx.respond(f"No longer monitoring messages for channel <#{ctx.channel_id}>")
     else:
         await ctx.respond(f"Messages were not being monitored for channel <#{ctx.channel_id}>")
+
+def calculate_left_to_farm(shard_string):
+    # calculate shards left to farm
+    try:
+        current_shards, out_of_shards = map(int, shard_string.split('/'))
+    except ValueError:
+        raise ValueError("Invalid format. The string should be in '##/##' format.")
+    
+    shards_needed = 330
+    match int(out_of_shards):
+        case 10 | 15:
+            shards_needed = 320
+        case 25:
+            shards_needed = 305
+        case 30 | 50: 
+            shards_needed = 280
+        case 65 | 80:
+            shards_needed = 250
+        case 85 | 145:
+            shards_needed = 185
+        case 100: 
+            shards_needed = 100
+        
+    left_to_farm = int(shards_needed) - int(current_shards)
+    return left_to_farm
+
+def calculate_cantina_crystal_cost(refreshes):
+    total_costs = [0, 100, 200, 300, 500, 700, 1100, 1500, 2300, 3100, 3900, 5500, 7100, 10300, 13500]
+    
+    if refreshes < 0 or refreshes >= len(total_costs):
+        raise ValueError("Invalid number of refreshes")
+    
+    return total_costs[refreshes]
+
+def calculate_normal_crystal_cost(refreshes):
+    total_costs = [0, 50, 100, 150, 250, 350, 450, 650, 850, 1050, 1450, 1850, 2250, 3050, 3850, 4650]
+    
+    if refreshes < 0 or refreshes >= len(total_costs):
+        raise ValueError("Invalid number of refreshes")
+    
+    return total_costs[refreshes]
+
+def calculate_hard_node_refresh_crystal_cost(refreshes):
+    costs = [25, 50, 100, 100, 200, 200, 400, 400, 900, 900, 1800, 1800, 1800, 3600]
+    total_cost = 0
+
+    for i in range(min(refreshes, len(costs))):
+        total_cost += costs[i]
+
+    return total_cost
+
+def create_shard_embed(shard_string, farm_type, shard_drop, node_energy_cost):
+    remaining_shards = calculate_left_to_farm(shard_string)
+    
+    # Basic daily shard gain based on farm type
+    daily_shard_gain = 1 / 3 * shard_drop
+
+    daily_energy_gain = {
+        "Normal Energy": 375,
+        "Cantina Energy": 165,
+        "Fleet Energy": 285,
+    }[farm_type]
+
+    farm_url = {
+        "Normal Energy": "https://swgoh.wiki/images/b/ba/Game-Icon-Energy.png",
+        "Cantina Energy": "https://swgoh.wiki/images/4/4c/Game-Icon-Cantina_Energy.png",
+        "Fleet Energy": "https://swgoh.wiki/images/3/3f/Game-Icon-Ship_Energy.png",
+    }[farm_type]
+    
+    def calculate_daily_total_attempts(farm_type, daily_energy_gain, node_energy_cost, refreshes):
+        energy_per_refresh = 120  # Assuming each refresh gives 120 energy
+
+        if farm_type == "Cantina Energy":
+            # attempts
+            cantina_energy = refreshes * energy_per_refresh + daily_energy_gain
+            attempts_per_day = cantina_energy / node_energy_cost
+            
+            #crystals
+            crystal_cost = calculate_cantina_crystal_cost(refreshes)
+
+        
+        else: 
+            attempts_per_day = 5 + (5 * refreshes) # hard node refreshes give 5 more attempts
+            crystal_cost = calculate_hard_node_refresh_crystal_cost(refreshes)
+
+            # calculate if more energy is needed than normal amount
+            total_energy_needed = attempts_per_day * node_energy_cost
+            if total_energy_needed > daily_energy_gain:
+                extra_energy_needed = total_energy_needed - daily_energy_gain
+                extra_energy_refreshes = (extra_energy_needed + energy_per_refresh - 1) // energy_per_refresh  # Ceiling division
+
+                # I might want to seperate this out into another column in the future to be more precise about where the cost is coming from
+                crystal_cost += calculate_normal_crystal_cost(extra_energy_refreshes)
+        
+        return attempts_per_day, crystal_cost
+
+    def calculate_completion(farm_type, remaining_shards, daily_energy_gain, daily_shard_gain, refreshes):
+        
+        total_daily_attempts, crystal_cost = calculate_daily_total_attempts(farm_type, daily_energy_gain, node_energy_cost, refreshes)
+        
+        adjusted_daily_shard_gain = total_daily_attempts * daily_shard_gain
+        
+        days_to_complete = remaining_shards / adjusted_daily_shard_gain
+        completion_date = datetime.now() + timedelta(days=days_to_complete)
+        epoch_timestamp = int(completion_date.timestamp())
+        
+        return round(days_to_complete, 1), completion_date.strftime("%Y-%m-%d"), crystal_cost, epoch_timestamp
+    
+    embed = discord.Embed(title=f"Shard Farming Estimates", color=0x00ff00)
+    embed.set_thumbnail(url=f"{farm_url}")  # Replace with actual URLs
+    
+    embed.add_field(name="Current Shards", value=f"{shard_string}", inline=True)
+    embed.add_field(name="Shards Required", value=f"{remaining_shards}", inline=True)
+    embed.add_field(name="Shard Drop Rate", value=f"{shard_drop}", inline=True)
+    
+    # No refresh
+    days, date, _, epoch_timestamp = calculate_completion(farm_type, remaining_shards, daily_energy_gain, daily_shard_gain, 0)
+    embed.add_field(name="No Refreshes", value=f"Days: {days} or <t:{epoch_timestamp}:R>\nCompletion: {date}", inline=False)
+    
+    # With refreshes
+    for refreshes in [1, 2, 3]:
+        days, date, crystals, epoch_timestamp = calculate_completion(farm_type, remaining_shards, daily_energy_gain, daily_shard_gain, refreshes)
+        embed.add_field(name=f"{refreshes} Refresh(es)/Day", value=f"Days: {days} or <t:{epoch_timestamp}:R>\nCompletion: {date}\nCrystal Cost: {crystals} (per day)", inline=False)
+    
+    return embed
+
+
+class TypeDropdown(discord.ui.Select):
+    def __init__(self, bot_: discord.Bot):
+        self.bot = bot_
+        self._value = ""
+        options = [
+            discord.SelectOption(label="Normal Energy"),
+            discord.SelectOption(label="Cantina Energy"),
+            discord.SelectOption(label="Fleet Energy")
+        ]
+        super().__init__(
+            placeholder="Type of Farm",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    @property
+    def value(self):
+        return self._value
+
+    async def callback(self, interaction: discord.Interaction):
+        self._value = self.values[0]
+        await interaction.response.defer()
+        return True
+
+class DropDropdown(discord.ui.Select):
+    def __init__(self, bot_: discord.Bot):
+        self.bot = bot_
+        self._value = 0
+        options = [
+            discord.SelectOption(label="1", description="Non-Accelerated"),
+            discord.SelectOption(label="2", description="Accelerated")
+        ]
+        super().__init__(
+            placeholder="Drop Count",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    @property
+    def value(self):
+        return self._value
+
+    async def callback(self, interaction: discord.Interaction):
+        self._value = self.values[0]
+        await interaction.response.defer()
+        return True
+
+class EnergyDropdown(discord.ui.Select):
+    def __init__(self, bot_: discord.Bot):
+        self.bot = bot_
+        self._value = 0
+        options = [
+            discord.SelectOption(label="8"),
+            discord.SelectOption(label="10"),
+            discord.SelectOption(label="12"),
+            discord.SelectOption(label="16"),
+            discord.SelectOption(label="20")
+        ]
+        super().__init__(
+            placeholder="Energy Cost",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    @property
+    def value(self):
+        return self._value
+
+    async def callback(self, interaction: discord.Interaction):
+        self._value = self.values[0]
+        await interaction.response.defer()
+        self.view
+
+class FarmTypeView(discord.ui.View):
+    def __init__(self, bot_: discord.Bot):
+        self.bot = bot_
+        super().__init__()
+        self.type_dropdown = TypeDropdown(self.bot)
+        self.drop_dropdown = DropDropdown(self.bot)
+        self.energy_dropdown = EnergyDropdown(self.bot)
+        
+        self.add_item(self.type_dropdown)
+        self.add_item(self.drop_dropdown)
+        self.add_item(self.energy_dropdown)
+
+    async def get_selections(self):
+        return (
+            self.type_dropdown.value,
+            self.drop_dropdown.value,
+            self.energy_dropdown.value
+        )
+
+class ShardModal(discord.ui.Modal):
+    def __init__(self, bot_: discord.Bot, *args, **kwargs) -> None:
+        self.bot = bot_
+        super().__init__(*args, **kwargs)
+        self.add_item(discord.ui.InputText(label="Current Shards", placeholder="Current shards \"##/##\" as seen ingame"))
+
+    async def callback(self, interaction: discord.Interaction):
+        farm_view = FarmTypeView(self.bot)
+        await interaction.response.send_message("Please select the farm details.", view=farm_view, ephemeral=True)
+        
+        # Wait for the user to complete the dropdown selections
+        # Loop until all selections are made
+        while True:
+            farm_type, drop_count, energy_cost = await farm_view.get_selections()
+            if farm_type and drop_count and energy_cost:
+                break
+            await asyncio.sleep(1) # Check every second
+
+        shard_string = self.children[0].value
+
+        farm_type, drop_count, energy_cost = await farm_view.get_selections()
+
+        embed = create_shard_embed(shard_string, farm_type, int(drop_count), int(energy_cost))
+        await interaction.followup.send(embed=embed)
+
+@bot.slash_command(name="estimate_farm", description="Estimate farm for a toon")
+async def estimate_farm(ctx: discord.ApplicationContext):
+    modal = ShardModal(bot, title="Gather Shard Count")
+    await ctx.send_modal(modal)
+
 # endregion
 
 # region PvP Tracking
