@@ -322,23 +322,22 @@ def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
     return player_info_list, name
 
 def get_rank_table(name, arena_string, sorted_player_info_list):
-    # Add fields for each player's rank, name, and change
-    # rank_values = "\n".join(str(player["rank"]) for player in sorted_player_info_list)
-    # name_values = "\n".join(player["name"] for player in sorted_player_info_list)
-    # change_values = "\n".join("^" if player["rank"] < player["previous_rank"] else ("v" if player["rank"] > player["previous_rank"] else "-") for player in sorted_player_info_list)
-    # activity_message.add_field(name="Rank", value=rank_values, inline=True)
-    # activity_message.add_field(name="Name", value=name_values, inline=True)
-    # activity_message.add_field(name="Change", value=change_values, inline=True)
     # Prepare the header of the table
-    table = ["`Rank   Name             Change`"]
+    # blank_line = "`{:<6} {:<16} {:<6}`".format("","","")
+    # table = ["```{:<6} {:<16} {:<6}".format("","","")]
+    table = []
+    table.append("```Rank   Name             Change")
 
     # Iterate over players and format each line
     for player in sorted_player_info_list:
-        change = ":green_circle:" if player["rank"] < player["previous_rank"] else (":red_circle:" if player["rank"] > player["previous_rank"] else ":blue_circle:")
-        line = "`{:<6} {:<16} `{:<10}`   `".format(player["rank"], player["name"], change)
+        # Add fields for each player's rank, name, and change
+        change = "+" if player["rank"] < player["previous_rank"] else ("-" if player["rank"] > player["previous_rank"] else "/")
+        line = "{:<6} {:<16} {:<10}   ".format(player["rank"], player["name"], change)
         table.append(line)
     
-    table.append("`{:<6} {:<16} {:<6}`".format("","",""))
+    # table.append("{:<6} {:<16} {:<6}```".format("","",""))
+
+    table.append("```")
     rank_table = discord.Embed(title=f"{name}'s {arena_string}", color=0xFFD700, description="\n".join(table))
     return rank_table
 
@@ -610,7 +609,7 @@ async def monitor(ctx: discord.ApplicationContext):
         description="Unmonitor channel's messages",
         guild_ids = ["618924061677846528", "1186439503183892580"]
 )
-async def monitor(ctx: discord.ApplicationContext):
+async def unmonitor(ctx: discord.ApplicationContext):
     await ctx.defer()
 
     if ctx.channel_id in channels:
@@ -635,12 +634,20 @@ fleetarena = bot.create_group("fleetarena", "Fleet Arena tracking", guild_ids=["
     description="Add your ally code XXXXXXXXX",
     required=False
 )
-async def enable(ctx: discord.ApplicationContext, ally_code: str):
+@option(
+    "user",
+    description="User that this will be enabled for",
+    required=False
+)
+async def enable(ctx: discord.ApplicationContext, ally_code: str, user: discord.User):
     await ctx.defer()
 
     # Check if an ally code is provided as an option
     
-    user_id = str(ctx.user.id)
+    if user is not None:
+        user_id = str(user.id)
+    else:
+        user_id = str(ctx.user.id)
     # Check if the user's ID already exists in the dictionary
     if user_id not in ally_code_tracking:
         # If not, create a new entry for the user
@@ -667,13 +674,12 @@ async def enable(ctx: discord.ApplicationContext, ally_code: str):
     }
 
     # Update the fleet arena monitoring settings for the user in the JSON file
-    user_id = str(ctx.user.id)
     ally_code_tracking[user_id]["fleetarena"] = fleetarena_settings
     
     # Save the updated settings into the JSON file
     save_ally_code_tracking()
 
-    await ctx.respond(f'Fleet arena monitoring has been enabled successfully for `{name}` at Rank `{ranks_result[2]}`!')
+    await ctx.respond(f'Fleet arena monitoring has been enabled successfully for `{name}` at Rank `{ranks_result[2]}` in channel <#{ctx.channel_id}>!')
 
 @fleetarena.command(
     name="disable",
@@ -752,7 +758,7 @@ async def add_player(ctx: discord.ApplicationContext, guild_name: str, player_na
     description="Display fleet arena ranks",
 )
 async def display_fleet_arena(ctx: discord.ApplicationContext):
-    # await ctx.defer()
+    await ctx.defer()
     arena_type = "fleetarena"
     arena_string = "Fleet Arena"
     user_id = str(ctx.user.id)
@@ -976,11 +982,11 @@ def parse_ticket_message(message, monitorAll: bool):
             # Iterate over each member line
             for line in member_lines:
                 # Extract member name and ticket count using regular expression
-                member_match = re.match(r"^\s*(.*?)\s+\(.*(\d+).*/600\)$", line)
+                member_match = re.match(r".*\s+\([\s,*]*(\d+)[\s,*]*/600\)", line)
                 if member_match:
                     # Increment counters
                     total_members_missed += 1
-                    total_tickets_missed += 600 - int(member_match.group(2))
+                    total_tickets_missed += 600 - int(member_match.group(1))
         else:
             return None, None
 
@@ -1004,7 +1010,7 @@ async def on_message(message):
                     member_message = f"\nTotal members in Guild: `{member_count}/50`\n**Total Tickets missing**: `{total_tickets_missed + (50 - member_count) * 600}`"
             description = f"Total Members missing tickets: `{total_members_missed}`\nMember Tickets missing: `{total_tickets_missed}`{member_message}"
             response = discord.Embed(title="Ticket Summary", color=0xFF0000, description=description)
-            await message.channel.send(embed=response, reference=message)
+            await message.channel.send(embed=response)
     
 
 # Run the bot
