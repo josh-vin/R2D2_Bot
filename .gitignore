@@ -164,3 +164,5 @@ personal_reset_times.json
 ally_code_tracking.json
 
 channels.json
+
+*.csv

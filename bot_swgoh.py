@@ -281,7 +281,12 @@ async def get_ally_code(guild_name: str, player_name: str):
 def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
     arena_tab_num = 2 if arena_type == "fleetarena" else 1
     ally_code = user_info.get("ally_code")
-    current_ranks, name = fetch_pvp_ranks(ally_code)
+    name = ""
+    try:
+        current_ranks, name = fetch_pvp_ranks(ally_code)
+    except TypeError as e:
+        print(f"Error fetching PvP ranks for ally code {ally_code}: {e}")
+
     player_info_list = []
     if current_ranks is not None:
         # Compare current ranks with stored ranks
@@ -302,7 +307,11 @@ def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
             player_info_list.append(player_info)
 
     for opponent in user_info.get(arena_type, {}).get("opponent_rank_tracking", []):
-            opponent_current_ranks, opponent_name = fetch_pvp_ranks(opponent["ally_code"])
+            try:
+                opponent_current_ranks, opponent_name = fetch_pvp_ranks(opponent["ally_code"])
+            except TypeError as e:
+                print(f"Error fetching PvP ranks for opponent ally code {opponent['ally_code']}: {e}")
+
             if opponent_current_ranks is not None:
                 if opponent["rank"] != opponent_current_ranks[arena_tab_num] or getAll:
                     opponent_previous_rank = opponent.get("previous_rank", opponent["rank"]) if getAll else opponent["rank"]
@@ -326,13 +335,13 @@ def get_rank_table(name, arena_string, sorted_player_info_list):
     # Prepare the header of the table
     # blank_line = "`{:<6} {:<16} {:<6}`".format("","","")
     # table = ["```{:<6} {:<16} {:<6}".format("","","")]
-    table = []
-    table.append("```Rank   Name             Change")
+    table = ["```ansi"]
+    table.append("[2;33mRank   Name             Change[0m")
 
     # Iterate over players and format each line
     for player in sorted_player_info_list:
         # Add fields for each player's rank, name, and change
-        change = "+" if player["rank"] < player["previous_rank"] else ("-" if player["rank"] > player["previous_rank"] else "/")
+        change = "[2;32m+[0m" if player["rank"] < player["previous_rank"] else ("[2;31m-[0m" if player["rank"] > player["previous_rank"] else "[2;34m/[0m")
         line = "{:<6} {:<16} {:<10}   ".format(player["rank"], player["name"], change)
         table.append(line)
     
@@ -375,7 +384,10 @@ async def send_arena_monitoring_messages(user_id, user_info, arena_type: str):
             if guild:
                 channel = guild.get_channel(int(channel_id))
                 for message in messages_to_send:
-                    await channel.send(embed=message)
+                    try:
+                        await channel.send(embed=message)
+                    except DiscordServerError as e:
+                        print(f"Error sending discord message to channel {channel.name}: {e}")
     return
 
 # endregion
@@ -733,144 +745,56 @@ def create_shard_embed(shard_string, farm_type, shard_drop, node_energy_cost):
     
     embed.add_field(name="Current Shards", value=f"{shard_string}", inline=True)
     embed.add_field(name="Shards Required", value=f"{remaining_shards}", inline=True)
+    embed.add_field(name="-", value="", inline=False)
     embed.add_field(name="Shard Drop Rate", value=f"{shard_drop}", inline=True)
-    
+    embed.add_field(name="Energy Cost", value=f"{node_energy_cost}", inline=True)
+
     # No refresh
     days, date, _, epoch_timestamp = calculate_completion(farm_type, remaining_shards, daily_energy_gain, daily_shard_gain, 0)
     embed.add_field(name="No Refreshes", value=f"Days: {days} or <t:{epoch_timestamp}:R>\nCompletion: {date}", inline=False)
-    
     # With refreshes
     for refreshes in [1, 2, 3]:
         days, date, crystals, epoch_timestamp = calculate_completion(farm_type, remaining_shards, daily_energy_gain, daily_shard_gain, refreshes)
-        embed.add_field(name=f"{refreshes} Refresh(es)/Day", value=f"Days: {days} or <t:{epoch_timestamp}:R>\nCompletion: {date}\nCrystal Cost: {crystals} (per day)", inline=False)
+        refresh_str = "Refresh" if refreshes == 1 else "Refreshes"
+        embed.add_field(name=f"{refreshes} {refresh_str} per Day", value=f"Days: {days} or <t:{epoch_timestamp}:R>\nCompletion: {date}\nCrystal Cost: {crystals}", inline=False)
     
     return embed
 
-
-class TypeDropdown(discord.ui.Select):
-    def __init__(self, bot_: discord.Bot):
-        self.bot = bot_
-        self._value = ""
-        options = [
-            discord.SelectOption(label="Normal Energy"),
-            discord.SelectOption(label="Cantina Energy"),
-            discord.SelectOption(label="Fleet Energy")
-        ]
-        super().__init__(
-            placeholder="Type of Farm",
-            min_values=1,
-            max_values=1,
-            options=options,
-        )
-
-    @property
-    def value(self):
-        return self._value
-
-    async def callback(self, interaction: discord.Interaction):
-        self._value = self.values[0]
-        await interaction.response.defer()
-        return True
-
-class DropDropdown(discord.ui.Select):
-    def __init__(self, bot_: discord.Bot):
-        self.bot = bot_
-        self._value = 0
-        options = [
-            discord.SelectOption(label="1", description="Non-Accelerated"),
-            discord.SelectOption(label="2", description="Accelerated")
-        ]
-        super().__init__(
-            placeholder="Drop Count",
-            min_values=1,
-            max_values=1,
-            options=options,
-        )
-
-    @property
-    def value(self):
-        return self._value
-
-    async def callback(self, interaction: discord.Interaction):
-        self._value = self.values[0]
-        await interaction.response.defer()
-        return True
-
-class EnergyDropdown(discord.ui.Select):
-    def __init__(self, bot_: discord.Bot):
-        self.bot = bot_
-        self._value = 0
-        options = [
-            discord.SelectOption(label="8"),
-            discord.SelectOption(label="10"),
-            discord.SelectOption(label="12"),
-            discord.SelectOption(label="16"),
-            discord.SelectOption(label="20")
-        ]
-        super().__init__(
-            placeholder="Energy Cost",
-            min_values=1,
-            max_values=1,
-            options=options,
-        )
-
-    @property
-    def value(self):
-        return self._value
-
-    async def callback(self, interaction: discord.Interaction):
-        self._value = self.values[0]
-        await interaction.response.defer()
-        self.view
-
-class FarmTypeView(discord.ui.View):
-    def __init__(self, bot_: discord.Bot):
-        self.bot = bot_
-        super().__init__()
-        self.type_dropdown = TypeDropdown(self.bot)
-        self.drop_dropdown = DropDropdown(self.bot)
-        self.energy_dropdown = EnergyDropdown(self.bot)
-        
-        self.add_item(self.type_dropdown)
-        self.add_item(self.drop_dropdown)
-        self.add_item(self.energy_dropdown)
-
-    async def get_selections(self):
-        return (
-            self.type_dropdown.value,
-            self.drop_dropdown.value,
-            self.energy_dropdown.value
-        )
-
-class ShardModal(discord.ui.Modal):
-    def __init__(self, bot_: discord.Bot, *args, **kwargs) -> None:
-        self.bot = bot_
-        super().__init__(*args, **kwargs)
-        self.add_item(discord.ui.InputText(label="Current Shards", placeholder="Current shards \"##/##\" as seen ingame"))
-
-    async def callback(self, interaction: discord.Interaction):
-        farm_view = FarmTypeView(self.bot)
-        await interaction.response.send_message("Please select the farm details.", view=farm_view, ephemeral=True)
-        
-        # Wait for the user to complete the dropdown selections
-        # Loop until all selections are made
-        while True:
-            farm_type, drop_count, energy_cost = await farm_view.get_selections()
-            if farm_type and drop_count and energy_cost:
-                break
-            await asyncio.sleep(1) # Check every second
-
-        shard_string = self.children[0].value
-
-        farm_type, drop_count, energy_cost = await farm_view.get_selections()
-
-        embed = create_shard_embed(shard_string, farm_type, int(drop_count), int(energy_cost))
-        await interaction.followup.send(embed=embed)
-
-@bot.slash_command(name="estimate_farm", description="Estimate farm for a toon")
-async def estimate_farm(ctx: discord.ApplicationContext):
-    modal = ShardModal(bot, title="Gather Shard Count")
-    await ctx.send_modal(modal)
+@bot.slash_command(name="estimate_farm", description="Estimate farm for a toon", guild_ids=["618924061677846528"])
+@option(
+    "shard_count",
+    description="Current shards \"##/##\" as seen ingame",
+    required=True
+)
+@option(
+    "farm_type",
+    description="Where the farm is located",
+    required=True,
+    choices=[ 
+        "Normal Energy",
+        "Cantina Energy",
+        "Fleet Energy"
+    ]
+)
+@option(
+    "drop_count",
+    description="Non-accelerated / Accelerated",
+    required=True,
+    choices=[ 
+        1, 2
+    ]
+)
+@option(
+    "energy_cost",
+    description="Energy cost per attempt",
+    required=True,
+    choices=[ 
+        8, 10, 12, 16, 20
+    ]
+)
+async def estimate_farm(ctx: discord.ApplicationContext, shard_count: str, farm_type, drop_count: int, energy_cost: int):
+    embed = create_shard_embed(shard_count, farm_type, int(drop_count), int(energy_cost))
+    await ctx.respond(embed=embed)
 
 # endregion
 
@@ -1106,7 +1030,6 @@ async def disable_squad_arena(ctx: discord.ApplicationContext):
     await ctx.respond("Squad arena monitoring has been disabled successfully!")
 # endregion
 # endregion
-
 # endregion
 
 # region Looping Functions
@@ -1260,7 +1183,8 @@ async def on_message(message):
             if guildname is not None:
                 id, member_count = get_guild_id(guildname)
                 if member_count is not None and member_count > 0:
-                    member_message = f"\nTotal members in Guild: `{member_count}/50`\n**Total Tickets missing**: `{total_tickets_missed + (50 - member_count) * 600}`"
+                    total_missing = total_tickets_missed + (50 - member_count) * 600
+                    member_message = f"\nTotal members in Guild: `{member_count}/50`\nTotal Tickets missing: `{total_missing}`\nGuild Tickets for day: **{30000-total_missing:,}**/30k"
             description = f"Total Members missing tickets: `{total_members_missed}`\nMember Tickets missing: `{total_tickets_missed}`{member_message}"
             response = discord.Embed(title="Ticket Summary", color=0xFF0000, description=description)
             await message.channel.send(embed=response)
