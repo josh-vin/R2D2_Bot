@@ -10,7 +10,8 @@ import pytz
 from zoneinfo import ZoneInfo
 import requests
 import re
-import asyncio
+from update_mod_data import check_and_update_mod_data, get_valid_mod_characters, get_character_mod_info, find_characters_with_mod
+from png_generator import create_image_with_mods
 
 # region Setup
 # Load environment variables from .env file
@@ -113,6 +114,13 @@ activity_messages = {
         "After Guild Reset": ":crossed_swords: Squad Arena PvP Battles\n:checkered_flag: 10 is the Goal",
         "Footer": "Be aware of when your personal reset is so that you can use PvP attempts from both days that this activity covers"
     }
+}
+
+mod_primary_stats = {
+    "Circle": ["Health", "Protection"],
+    "Arrow": ["Speed", "Accuracy", "Critical Avoidance", "Health", "Protection", "Offense", "Defense"],
+    "Triangle": ["Critical Chance", "Critical Damage", "Health", "Protection", "Offense", "Defense"],
+    "Cross": ["Tenacity", "Potency", "Health", "Protection", "Offense", "Defense"]
 }
 # endregion
 
@@ -335,13 +343,13 @@ def get_rank_table(name, arena_string, sorted_player_info_list):
     # Prepare the header of the table
     # blank_line = "`{:<6} {:<16} {:<6}`".format("","","")
     # table = ["```{:<6} {:<16} {:<6}".format("","","")]
-    table = ["```ansi"]
-    table.append("[2;33mRank   Name             Change[0m")
+    table = ["```"]
+    table.append("Rank   Name             Change")
 
     # Iterate over players and format each line
     for player in sorted_player_info_list:
         # Add fields for each player's rank, name, and change
-        change = "[2;32m+[0m" if player["rank"] < player["previous_rank"] else ("[2;31m-[0m" if player["rank"] > player["previous_rank"] else "[2;34m/[0m")
+        change = "+" if player["rank"] < player["previous_rank"] else ("-" if player["rank"] > player["previous_rank"] else "/")
         line = "{:<6} {:<16} {:<10}   ".format(player["rank"], player["name"], change)
         table.append(line)
     
@@ -798,10 +806,103 @@ async def estimate_farm(ctx: discord.ApplicationContext, shard_count: str, farm_
 
 # endregion
 
+#region Mods Commands
+@bot.slash_command(
+    name="mods",
+    description="Show mod information based on SWGOH.gg's aggregated mod data",
+    guild_ids=["618924061677846528", "1186439503183892580"]
+)
+@option(
+    "character",
+    description="Name of Character to show recommended mods for",
+    required=True,
+    autocomplete=get_valid_mod_characters
+)
+async def mods(ctx: discord.ApplicationContext, character: str):
+    mod_info = get_character_mod_info(character)
+
+    if mod_info is None:
+        ctx.respond("Please select a valid character within the character option.")
+    
+    output_image_path = "output_image.png"
+    create_image_with_mods(output_image_path, mod_info["character_name"], mod_info["portrait_url"], mod_info["recommended_stats"], mod_info["mod_sets"])
+    
+    # Send the image as a response
+    with open(output_image_path, 'rb') as image_file:
+        await ctx.respond(file=discord.File(image_file, 'mod_info_image.png'))
+
+async def primary_stat_autocomplete(ctx: discord.AutocompleteContext):
+    mod_type = ctx.options.get("mod_type")
+    if mod_type:
+        return mod_primary_stats.get(mod_type, [])
+    return []
+
+@bot.slash_command(
+    name="modsearch",
+    description="Search for characters with specific mod recommendations",
+    guild_ids=["618924061677846528", "1186439503183892580"]
+)
+@option(
+    "mod_type",
+    description="Select the mod type (Circle, Arrow, Triangle, or Cross)",
+    required=True,
+    choices=list(mod_primary_stats.keys())
+)
+@option(
+    "primary_stat",
+    description="Select the primary stat",
+    required=True,
+    autocomplete=primary_stat_autocomplete
+)
+@option(
+    "mod_set",
+    description="Select the Mod Set",
+    required=True,
+    choices=["Health","Defense","Critical Damage","Critical Chance","Tenacity","Offense","Potency","Speed"]
+)
+async def modsearch(ctx: discord.ApplicationContext, mod_type: str, primary_stat: str, mod_set):
+    valid_stats = mod_primary_stats.get(mod_type, [])
+    
+    if primary_stat not in valid_stats:
+        await ctx.respond(f"Invalid primary stat for {mod_type}. Please choose one of: {', '.join(valid_stats)}.")
+        return
+    
+    matching_characters = find_characters_with_mod(mod_type, primary_stat, mod_set)
+    
+    if matching_characters:
+        response_message = f"**Characters with {primary_stat} on {mod_type} with {mod_set}:**\n"
+        await ctx.respond(response_message)
+        response_message = ""
+        character_limit = 2000  # Discord message character limit
+
+        # Loop through the matching characters
+        for character in matching_characters:
+            # Add the character to the response message, each on a new line
+            new_line = f"{character}\n"
+            
+            # Check if adding this line would exceed the character limit
+            if len(response_message) + len(new_line) > character_limit:
+                # If it would, send the current message and start a new one
+                await ctx.respond(response_message)
+                response_message = new_line
+            else:
+                # Otherwise, just add the new line to the response
+                response_message += new_line
+
+        # Send any remaining characters that didn't hit the limit
+        if response_message:
+            await ctx.respond(response_message)
+    else:
+        await ctx.respond(f"No characters found with {primary_stat} on {mod_type}.")
+
+
+
+# endregion
+
 # region PvP Tracking
 # region Fleet Arena
 # create Slash Command group with bot.create_group
-fleetarena = bot.create_group("fleetarena", "Fleet Arena tracking", guild_ids=["618924061677846528"])
+fleetarena = bot.create_group("fleetarena", "Fleet Arena tracking", guild_ids=["618924061677846528", "1273871496145801317"])
 @fleetarena.command(
     name="enable",
     description="Enable fleet arena rank monitoring",
@@ -1033,6 +1134,11 @@ async def disable_squad_arena(ctx: discord.ApplicationContext):
 # endregion
 
 # region Looping Functions
+# Task that runs every 30 minutes
+@tasks.loop(minutes=30)
+async def update_mod_data():
+    check_and_update_mod_data()
+
 @tasks.loop(minutes=1)
 async def send_daily_message():
     for guild_id, reset_info in guild_reset_times.items():
@@ -1108,6 +1214,12 @@ async def check_pvp_ranks():
         if user_info is not None and user_info != {} and user_info.get("ally_code") is not None:
             await send_arena_monitoring_messages(user_id, user_info, "fleetarena")
             await send_arena_monitoring_messages(user_id, user_info, "squadarena")
+
+@update_mod_data.before_loop
+async def before_update_mod_data():
+    print("Checking and updating mod data...")
+    await bot.wait_until_ready()
+    print("Polling every 30 minutes to check and update mod data!")
 
 @send_daily_message.before_loop
 async def before_send_daily_message():
@@ -1191,6 +1303,7 @@ async def on_message(message):
     
 
 # Run the bot
+update_mod_data.start()
 send_daily_message.start()
 send_daily_personal_message.start()
 check_pvp_ranks.start()

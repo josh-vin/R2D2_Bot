@@ -166,3 +166,7 @@ ally_code_tracking.json
 channels.json
 
 *.csv
+
+*.json
+
+*.png
