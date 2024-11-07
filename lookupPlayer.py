@@ -1,7 +1,7 @@
 import requests
 import sys
 
-def get_guild_id(guild_name):
+def get_guild_info(guild_name):
     url = 'http://localhost:5678/getGuilds'
     payload = {
         "payload": {
@@ -17,14 +17,15 @@ def get_guild_id(guild_name):
     if response.status_code == 200:
         guild_data = response.json().get('guild', [])
         for guild in guild_data:
-            if guild['name'] == guild_name:
-                return guild['id'], guild['memberCount']
-        else:
-            print("Guild not found.")
-            return None
+            if guild.get('name') == guild_name:
+                member_count = guild.get('memberCount', 0)
+                shceduled_raid_offset = guild.get('autoLaunchConfig', {}).get('scheduledUtcOffsetSeconds', None)
+                return guild['id'], member_count, shceduled_raid_offset
+        print("Guild not found.")
+        return None, None, None
     else:
         print("Failed to fetch guild. Status code:", response.status_code)
-        return None
+        return None, None, None
 
 def get_player_id_from_guild(guild_id, player_name):
     url = 'http://localhost:5678/guild'
@@ -73,7 +74,7 @@ def main():
     guild_name = sys.argv[1]
     player_name = sys.argv[2]
 
-    guild_id = get_guild_id(guild_name)
+    guild_id, _, _ = get_guild_info(guild_name) #  member_count, shceduled_raid_offset
     if guild_id:
         player_id = get_player_id_from_guild(guild_id, player_name)
         if player_id:

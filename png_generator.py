@@ -49,13 +49,16 @@ def create_image_with_mods(output_path, character_name, character_url, mod_data,
     
     # Add character picture on the left side
     character_img = download_image(character_url)
-    character_img = character_img.resize((200, 200))  # Resize to fit nicely
+    character_img = character_img.resize((200, 200)).convert("RGBA")  # Resize to fit nicely
     # Calculate image position (centered horizontally below the text)
     image_x = width / 2 - character_img.width / 2
-    image_y = 100
+    image_y = 115
 
     # Paste the character image
-    image.paste(character_img, (int(image_x), int(image_y)), character_img)
+    try:
+        image.paste(character_img, (int(image_x), int(image_y)), character_img)
+    except:
+        print(f"Could not paste image of character {character_img} from URL {character_url}")
 
 
     # Load mod set images and position them
@@ -121,7 +124,27 @@ def create_image_with_mods(output_path, character_name, character_url, mod_data,
                     # Add text for the mod type
                     mod_text = mod_data.get(mod_type, 'Not Available')
                     text_position = (x_position + icon_size + 10, y_position + (icon_size // 3))
-                    draw.text(text_position, mod_text, font=font_medium, fill=text_color)
+
+                    # Calculate the maximum allowed width for the text
+                    max_text_width = spacing - 20  # Adjust as needed for buffer space
+
+                    # Split the text into multiple lines if necessary
+                    lines = []
+                    current_line = ""
+                    for word in mod_text.split():
+                        if draw.textlength(current_line + word, font=font_medium) <= max_text_width:
+                            if current_line:
+                                current_line += " "
+                            current_line += word
+                        else:
+                            lines.append(current_line)
+                            current_line = word
+                    lines.append(current_line)
+
+                    # Draw the text line by line
+                    for i, line in enumerate(lines):
+                        line_position = (text_position[0], text_position[1] + i * font_medium.size)
+                        draw.text(line_position, line, font=font_medium, fill=text_color)
 
 
 
@@ -142,15 +165,31 @@ def create_image_with_mods(output_path, character_name, character_url, mod_data,
     image.save(output_path)
 
 # Example data
-character_name = "Supreme Leader Kylo Ren"
-character_url = "https://game-assets.swgoh.gg/textures/tex.charui_kyloren_tros.png"
-mod_data = {
-    "arrow": "Speed",
-    "triangle": "Critical Damage",
-    "circle": "Health",
-    "cross": "Health"
+example = {
+        "character_name": "Greedo",
+        "portrait_url": "https://game-assets.swgoh.gg/textures/tex.charui_greedo.png",
+        "best_mods_url": "https://swgoh.gg/units/greedo/best-mods/",
+        "mod_sets": [
+            "Critical Chance",
+            "Critical Damage"
+        ],
+        "recommended_stats": {
+            "arrow": "Speed",
+            "triangle": "Critical Damage / Critical Chance",
+            "circle": "Protection",
+            "cross": "Potency / Protection"
+        }
 }
-mod_set_types = ["Offense", "Critical Chance"]  # Example mod set types
+
+# character_name = "Supreme Leader Kylo Ren"
+# character_url = "https://game-assets.swgoh.gg/textures/tex.charui_kyloren_tros.png"
+# mod_data = {
+#     "arrow": "Speed",
+#     "triangle": "Critical Damage",
+#     "circle": "Health",
+#     "cross": "Health"
+# }
+# mod_set_types = ["Offense", "Critical Chance"]  # Example mod set types
 
 # Create the image
-create_image_with_mods("output_image.png", character_name, character_url, mod_data, mod_set_types)
+create_image_with_mods("output_image.png", example["character_name"], example["portrait_url"], example["recommended_stats"], example["mod_sets"])

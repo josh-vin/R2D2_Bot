@@ -10,7 +10,7 @@ def load_mod_data():
         return json.load(json_file)
 
 def check_and_update_mod_data():
-    url = "https://swgoh.gg/stats/mod-meta-report/"
+    url = "https://swgoh.gg/stats/mod-meta-report/guilds_100_gp/"
     response = requests.get(url)
     soup = BeautifulSoup(response.content, 'html.parser')
 
@@ -81,14 +81,17 @@ def get_character_mod_info(character_name: str):
     return None  # Return None if the character is not found
 
 # Function to find characters matching the search criteria
-def find_characters_with_mod(mod_type, primary_stat, mod_set):
+def find_characters_with_mod(mod_type=None, primary_stat=None, mod_set=None):
     mod_data = load_mod_data()
     
     characters = []
     for character in mod_data:
-        if mod_set in character["mod_sets"]:
+        # Check if mod_set matches or if mod_set is None (no filtering by mod_set)
+        if mod_set is None or mod_set in character["mod_sets"]:
             for mod, stat in character["recommended_stats"].items():
-                if mod == mod_type.lower() and primary_stat in stat:
+                # Check if mod_type matches or if mod_type is None (no filtering by mod_type)
+                if (mod_type is None or mod == mod_type.lower()) and \
+                   (primary_stat is None or primary_stat in stat):
                     characters.append(character["character_name"])
                     break
     return characters
