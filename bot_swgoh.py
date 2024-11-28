@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import requests
 import re
 from update_mod_data import check_and_update_mod_data, get_valid_mod_characters, get_character_mod_info, find_characters_with_mod
+from character_caching import update_all_characters_cache, get_valid_all_characters, load_character
 from png_generator import create_image_with_mods
 from extract_inventory import parse_inventory_file
 from functools import wraps
@@ -257,7 +258,14 @@ def fetch_pvp_ranks(ally_code: str):
         utc_offset = response.json().get('localTimeZoneOffsetMinutes', 0)
         pvp_profile = response.json().get('pvpProfile', [])
         name = response.json().get('name', "")
-        ranks = {entry['tab']: entry['rank'] for entry in pvp_profile}
+        ranks = {
+            entry['tab']: {
+                'rank': entry['rank'],
+                'lastSaveTime': entry['squad']['lastSaveTime']
+            }
+            for entry in pvp_profile
+        }
+
         return ranks, name, utc_offset
     else:
         print("Failed to fetch PvP ranks. Status code:", response.status_code)
@@ -377,7 +385,7 @@ def fetch_payout_times(user_info, arena_type: str):
                 "name": name,
                 "payout_time_epoch": payout_time_epoch,
                 "payout_time_utc": payout_time_utc,
-                "rank": ranks[arena_tab_num],
+                "rank": ranks[arena_tab_num]["rank"],
             })
 
     return payout_times
@@ -386,13 +394,15 @@ def fetch_payout_times(user_info, arena_type: str):
 def get_payout_embed(payout_players):
     if not payout_players:
         return None  # No players to display
-
+    
+    sorted_payout_players = sorted(payout_players, key=lambda x: x["rank"])
+    
     # Create an Embed object
     embed = discord.Embed(color=0xFFA500)
 
     # Group players by payout time
     payout_groups = {}
-    for player in payout_players:
+    for player in sorted_payout_players:
         payout_time_str = f"<t:{player['payout_time_epoch']}:f>"
         if payout_time_str not in payout_groups:
             payout_groups[payout_time_str] = []
@@ -418,11 +428,12 @@ def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
             # Compare current ranks with stored ranks
             is_payout, payout_time_epoch = check_payout_time(utc_offset, arena_type)
 
-            if user_info.get(arena_type, {}).get("rank") != current_ranks[arena_tab_num] or getAll or is_payout:
+            if user_info.get(arena_type, {}).get("rank") != current_ranks[arena_tab_num]["rank"] or getAll or is_payout:
                 previous_rank = ally_code_tracking[user_id][arena_type].get("previous_rank", ally_code_tracking[user_id][arena_type]["rank"]) if getAll else ally_code_tracking[user_id][arena_type]["rank"]
+                save_time = current_ranks
                 # Update stored ranks
                 ally_code_tracking[user_id][arena_type]["name"] = name
-                ally_code_tracking[user_id][arena_type]["rank"] = current_ranks[arena_tab_num]
+                ally_code_tracking[user_id][arena_type]["rank"] = current_ranks[arena_tab_num]["rank"]
                 ally_code_tracking[user_id][arena_type]["previous_rank"] = previous_rank
                 
                 # Save the updated settings into the JSON file
@@ -430,7 +441,7 @@ def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
 
                 player_info = {
                         "name": name,
-                        "rank": current_ranks[arena_tab_num],  # Current rank
+                        "rank": current_ranks[arena_tab_num]["rank"],  # Current rank
                         "previous_rank": previous_rank,  # Previous rank
                         "payout_time_epoch": payout_time_epoch,
                         "is_payout": is_payout
@@ -446,11 +457,11 @@ def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
                 if opponent_current_ranks is not None:
                     is_opponent_payout, payout_time_epoch = check_payout_time(opponent_utc_offset, arena_type)
 
-                    if opponent["rank"] != opponent_current_ranks[arena_tab_num] or getAll or is_opponent_payout:
+                    if opponent["rank"] != opponent_current_ranks[arena_tab_num]["rank"] or getAll or is_opponent_payout:
                         opponent_previous_rank = opponent.get("previous_rank", opponent["rank"]) if getAll else opponent["rank"]
                         # Update opponent's stored rank
                         opponent["name"] = opponent_name
-                        opponent["rank"] = opponent_current_ranks[arena_tab_num]
+                        opponent["rank"] = opponent_current_ranks[arena_tab_num]["rank"]
                         opponent["previous_rank"] = opponent_previous_rank
                         # Save the updated settings into the JSON file
                         save_ally_code_tracking()
@@ -458,7 +469,7 @@ def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
                         # add player to list for generating messages
                         player_info = {
                             "name": opponent_name,
-                            "rank": opponent_current_ranks[arena_tab_num],  # Current rank
+                            "rank": opponent_current_ranks[arena_tab_num]["rank"],  # Current rank
                             "previous_rank": opponent_previous_rank,  # Previous rank
                             "payout_time_epoch": payout_time_epoch,
                             "is_payout": is_opponent_payout
@@ -508,6 +519,7 @@ def get_payout_table(sorted_payout_times):
         # Convert the UTC time to a formatted string
         formatted_time = f"<t:{payout_time_epoch}:f>"
         # Join all player names with new lines
+        players = sorted(players, key=lambda player: player['rank'])
         names_list = "> " + "\n> ".join([f"{player['rank']} - {player['name']}" for player in players])
         payout_table.add_field(name=formatted_time, value=names_list, inline=False)
 
@@ -628,7 +640,7 @@ async def activity(ctx: discord.ApplicationContext, showall: bool = False, day: 
     # Send the activity message
     await ctx.respond(embed=activity_embed)
 
-register = bot.create_group("register", "R2D2 Registration", guild_ids=["618924061677846528", "1273871496145801317", "1186439503183892580"])
+register = bot.create_group("register", "R2D2 Registration")
 @register.command(
     name="guildactivity",
     description="Register the guild's reset time to send the daily message",
@@ -656,11 +668,28 @@ register = bot.create_group("register", "R2D2 Registration", guild_ids=["6189240
     required=True,
     autocomplete=get_hour_options
 )
-async def register_guildactivity(ctx: discord.ApplicationContext, guildname: str, timezone: str, timeformat: str, resethour: str):
+@option(
+    "dailymessages",
+    description="Whether you would like the daily message sent or not.",
+    required=True,
+
+)
+@option(
+    "channel",
+    description="Which channel you would like the daily message sent to. (Defaults to this channel)",
+    required=False,
+)
+async def register_guildactivity(ctx: discord.ApplicationContext, guildname: str, timezone: str, timeformat: str, resethour: str, dailymessages: bool, channel: discord.TextChannel):
     if not ctx.author.guild_permissions.administrator:
         admin_message = discord.Embed(title="Only an admin may run this command", color=0xff0000)
         await ctx.respond(embed=admin_message)
         return
+    
+    if channel == None:
+        channelid = ctx.channel_id
+    else: 
+        channelid = channel.id
+
     # Update the reset time for the guild in the JSON file
     # I could allow one server to have multiple guild notifications but for now its based off the discord server id (ctx.guild_id)
     current_time = datetime.now(pytz.timezone(timezone))
@@ -670,7 +699,8 @@ async def register_guildactivity(ctx: discord.ApplicationContext, guildname: str
         "timeformat": timeformat,
         "resethour": resethour,
         "dst": dst,
-        "channelid": ctx.channel_id,
+        "dailymessages": dailymessages,
+        "channelid":channelid,
         "guildname": guildname
     }
 
@@ -698,7 +728,7 @@ async def register_allycode(ctx: discord.ApplicationContext, ally_code: str):
 
     await ctx.respond(f"Ally code {ally_code} has been registered.")
 
-unregister = bot.create_group("unregister", "R2D2 Un-Registration", guild_ids=["618924061677846528", "1273871496145801317", "1186439503183892580"])
+unregister = bot.create_group("unregister", "R2D2 Un-Registration")
 @unregister.command(
     name="unregister",
     description="Unregister the guild's reset time for sending the daily message"
@@ -801,7 +831,6 @@ async def search(ctx: discord.ApplicationContext, guild_name: str, player_name: 
 @bot.slash_command(
         name="monitor",
         description="Monitor channel's messages",
-        guild_ids = ["618924061677846528", "1186439503183892580"]
 )
 async def monitor(ctx: discord.ApplicationContext):
     await ctx.defer()
@@ -816,7 +845,6 @@ async def monitor(ctx: discord.ApplicationContext):
 @bot.slash_command(
         name="unmonitor",
         description="Unmonitor channel's messages",
-        guild_ids = ["618924061677846528", "1186439503183892580"]
 )
 async def unmonitor(ctx: discord.ApplicationContext):
     await ctx.defer()
@@ -834,7 +862,7 @@ def calculate_left_to_farm(shard_string):
     try:
         current_shards, out_of_shards = map(int, shard_string.split('/'))
     except ValueError:
-        raise ValueError("Invalid format. The string should be in '##/##' format.")
+        return "Invalid format. The string should be in '##/##' format."
     
     shards_needed = 330
     match int(out_of_shards):
@@ -879,8 +907,11 @@ def calculate_hard_node_refresh_crystal_cost(refreshes):
 
     return total_cost
 
-def create_shard_embed(shard_string, farm_type, shard_drop, node_energy_cost):
+def create_shard_embed(shard_string, farm_type, shard_drop, node_energy_cost, character):
     remaining_shards = calculate_left_to_farm(shard_string)
+    if (remaining_shards == "Invalid format. The string should be in '##/##' format."):
+        embed = discord.Embed(title=remaining_shards, color=0xff0000)
+        return embed
     
     # Basic daily shard gain based on farm type
     daily_shard_gain = 1 / 3 * shard_drop
@@ -937,11 +968,13 @@ def create_shard_embed(shard_string, farm_type, shard_drop, node_energy_cost):
         return round(days_to_complete, 1), completion_date.strftime("%Y-%m-%d"), crystal_cost, epoch_timestamp
     
     embed = discord.Embed(title=f"Shard Farming Estimates", color=0x00ff00)
-    embed.set_thumbnail(url=f"{farm_url}")  # Replace with actual URLs
-    
+    embed.set_author(name=f"{character}", icon_url=f"{farm_url}") # set character name here
+    character_info = load_character(character)
+
+    if (character_info != None):
+        embed.set_thumbnail(url=f"{character_info["image"]}")
     embed.add_field(name="Current Shards", value=f"{shard_string}", inline=True)
     embed.add_field(name="Shards Required", value=f"{remaining_shards}", inline=True)
-    embed.add_field(name="-", value="", inline=False)
     embed.add_field(name="Shard Drop Rate", value=f"{shard_drop}", inline=True)
     embed.add_field(name="Energy Cost", value=f"{node_energy_cost}", inline=True)
 
@@ -956,7 +989,7 @@ def create_shard_embed(shard_string, farm_type, shard_drop, node_energy_cost):
     
     return embed
 
-@bot.slash_command(name="estimate_farm", description="Estimate farm for a toon", guild_ids=["618924061677846528", "1186439503183892580"])
+@bot.slash_command(name="estimate_farm", description="Estimate farm for a toon")
 @option(
     "shard_count",
     description="Current shards \"##/##\" as seen ingame",
@@ -988,8 +1021,14 @@ def create_shard_embed(shard_string, farm_type, shard_drop, node_energy_cost):
         8, 10, 12, 16, 20
     ]
 )
-async def estimate_farm(ctx: discord.ApplicationContext, shard_count: str, farm_type, drop_count: int, energy_cost: int):
-    embed = create_shard_embed(shard_count, farm_type, int(drop_count), int(energy_cost))
+@option(
+    "character",
+    description="Name of character/ship you are farming",
+    required=True,
+    autocomplete=get_valid_all_characters
+)
+async def estimate_farm(ctx: discord.ApplicationContext, shard_count: str, farm_type, drop_count: int, energy_cost: int, character: str):
+    embed = create_shard_embed(shard_count, farm_type, int(drop_count), int(energy_cost), character)
     await ctx.respond(embed=embed)
 
 # endregion
@@ -998,7 +1037,6 @@ async def estimate_farm(ctx: discord.ApplicationContext, shard_count: str, farm_
 @bot.slash_command(
     name="mods",
     description="Show mod information based on SWGOH.gg's aggregated mod data",
-    guild_ids=["618924061677846528", "1186439503183892580"]
 )
 @option(
     "character",
@@ -1028,7 +1066,6 @@ async def primary_stat_autocomplete(ctx: discord.AutocompleteContext):
 @bot.slash_command(
     name="modsearch",
     description="Search for characters by a specific mod type that is recommended",
-    guild_ids=["618924061677846528", "1186439503183892580"]
 )
 @option(
     "mod_type",
@@ -1076,12 +1113,17 @@ async def modsearch(ctx: discord.ApplicationContext, mod_type: str, primary_stat
                 return
 
             # Create an embed if it's the first group or if adding this field exceeds the limit
-            if i == 0 or len(embeds[-1].description) + len(field_value) > 2000:
-                embed = discord.Embed(title=f"{match_length} Characters with {primary_stat} on {mod_type} with {mod_set if mod_set is not None else 'Any'} Set", color=0x1E90FF)
+            if i == 0 or (embeds and embeds[-1].description and len(embeds[-1].description) + len(field_value) > 2000):
+                embed = discord.Embed(
+                    title=f"{match_length} Characters with {primary_stat} on {mod_type} with {mod_set if mod_set is not None else 'Any'} Set",
+                    description="",  # Initialize description to an empty string
+                    color=0x1E90FF
+                )
                 embeds.append(embed)
 
             # Add the field to the last embed
-            embeds[-1].add_field(name=f"{i + 1} to {i + len(character_group)}", value=field_value, inline=True)
+            if embeds:
+                embeds[-1].add_field(name=f"{i + 1} to {i + len(character_group)}", value=field_value, inline=True)
 
         # Send all embeds
         for embed in embeds:
@@ -1094,7 +1136,7 @@ async def modsearch(ctx: discord.ApplicationContext, mod_type: str, primary_stat
 # region PvP Tracking
 # region Fleet Arena
 # create Slash Command group with bot.create_group
-fleetarena = bot.create_group("fleetarena", "Fleet Arena tracking", guild_ids=["618924061677846528", "1273871496145801317"])
+fleetarena = bot.create_group("fleetarena", "Fleet Arena tracking")
 @fleetarena.command(
     name="enable",
     description="Enable fleet arena rank monitoring",
@@ -1141,7 +1183,7 @@ async def enable(ctx: discord.ApplicationContext, ally_code: str, user: discord.
         "enabled": True,
         "name": name,
         "utc_offset": utc_offset,
-        "rank": ranks_result[2],
+        "rank": ranks_result[2]["rank"],
         "opponent_rank_tracking": []  # Initialize empty list for tracking
     }
 
@@ -1151,7 +1193,7 @@ async def enable(ctx: discord.ApplicationContext, ally_code: str, user: discord.
     # Save the updated settings into the JSON file
     save_ally_code_tracking()
 
-    await ctx.respond(f'Fleet arena monitoring has been enabled successfully for `{name}` at Rank `{ranks_result[2]}` in channel <#{ctx.channel_id}>!')
+    await ctx.respond(f'Fleet arena monitoring has been enabled successfully for `{name}` at Rank `{ranks_result[2]["rank"]}` in channel <#{ctx.channel_id}>!')
 
 @fleetarena.command(
     name="disable",
@@ -1173,17 +1215,21 @@ async def disable_fleet_arena(ctx: discord.ApplicationContext):
 @fleetarena.command(
     name="add",
     description="Add a player to fleet arena rank monitoring",
-    guild_ids=["618924061677846528", "1273871496145801317"]
 )
 @option(
     "guild_name",
     description="Guild name",
-    required=True
+    required=False
 )
 @option(
     "player_name",
     description="Player name",
-    required=True
+    required=False
+)
+@option(
+    "ally_code",
+    description="Ally Code of Player",
+    required=False
 )
 async def add_player(ctx: discord.ApplicationContext, guild_name: str, player_name: str = None, ally_code: str = None):
     await ctx.defer()
@@ -1206,7 +1252,7 @@ async def add_player(ctx: discord.ApplicationContext, guild_name: str, player_na
         # Retrieve the fleet rank from the player's PvP profile
         ranks_result, name, utc_offset = fetch_pvp_ranks(ally_code)
         if ranks_result is not None:
-            fleet_rank = ranks_result.get(2)
+            fleet_rank = ranks_result.get(2, {}).get('rank')
             if fleet_rank:
                 opponent = {
                     "ally_code": ally_code,
@@ -1230,7 +1276,6 @@ async def add_player(ctx: discord.ApplicationContext, guild_name: str, player_na
 @fleetarena.command(
     name="remove",
     description="Remove a player from fleet arena rank monitoring",
-    guild_ids=["618924061677846528", "1273871496145801317"]
 )
 @option(
     "player_name",
@@ -1324,11 +1369,10 @@ async def display_fleet_payouts(ctx: discord.ApplicationContext):
 
 # region Squad Arena
 # create Slash Command group with bot.create_group
-squadarena = bot.create_group("squadarena", "Squad Arena tracking", guild_ids=["618924061677846528"])
+squadarena = bot.create_group("squadarena", "Squad Arena tracking")
 @squadarena.command(
     name="enable",
     description="Enable squad arena rank monitoring",
-    guild_ids=["618924061677846528"]
 )
 @option(
     "ally_code",
@@ -1364,7 +1408,7 @@ async def enable(ctx: discord.ApplicationContext, ally_code: str):
         "enabled": True,
         "name": name,
         "utc_offset": utc_offset,
-        "rank": ranks_result[1],
+        "rank": ranks_result[1]["rank"],
         "opponent_rank_tracking": []  # Initialize empty list for tracking
     }
 
@@ -1375,7 +1419,7 @@ async def enable(ctx: discord.ApplicationContext, ally_code: str):
     # Save the updated settings into the JSON file
     save_ally_code_tracking()
 
-    await ctx.respond(f'Squad arena monitoring has been enabled successfully for `{name}` at Rank `{ranks_result[1]}`!')
+    await ctx.respond(f'Squad arena monitoring has been enabled successfully for `{name}` at Rank `{ranks_result[1]["rank"]}`!')
     return
 
 @squadarena.command(
@@ -1399,7 +1443,7 @@ async def disable_squad_arena(ctx: discord.ApplicationContext):
 # endregion
 
 # region Raid Commands
-raid = bot.create_group("raid", "(WIP) Raid Commands for Guild Leaders", guild_ids=["1186439503183892580"])
+raid = bot.create_group("raid", "(WIP) Raid Commands for Guild Leaders")
 
 @raid.command(
     name="channel",
@@ -1436,20 +1480,86 @@ async def set_tickets(ctx: discord.ApplicationContext, tickets: int):
     guild_id = str(ctx.guild.id)
     guild_reset_times[guild_id]["current_tickets"] = tickets
     save_guild_reset_times()
-    await ctx.respond(f"Current tickets set to {tickets}.")
+    await ctx.respond(f"Current tickets set to `{tickets:,}`.")
+
+@raid.command(
+    name="status",
+    description="Displays the current raid status, or estimated days until next raid if no active raid.",
+)
+async def show_raid_status(ctx: discord.ApplicationContext):
+    guild_id = str(ctx.guild.id)
+    guild_info = guild_reset_times.get(guild_id, {})
+    
+    # Retrieve raid end epoch and current tickets
+    raid_end_epoch = guild_info.get("raid_end_epoch")
+    current_tickets = guild_info.get("current_tickets", 0)
+    scheduled_raid_offset = guild_info.get("scheduled_raid_offset")
+    guildname = guild_info.get("guildname")
+    
+    # If scheduled raid offset is missing, retrieve and store it
+    if not scheduled_raid_offset:
+        _, _, scheduled_raid_offset = get_guild_info(guildname)
+        guild_reset_times[guild_id]["scheduled_raid_offset"] = int(scheduled_raid_offset)
+        save_guild_reset_times()
+    
+    if raid_end_epoch:
+        # Display the raid end time if a raid is active
+        await ctx.respond(f"The current raid will end <t:{int(raid_end_epoch)}:R>.")
+    else:
+        # Calculate days remaining to reach 180,000 tickets
+        tickets_needed = max(0, 180000 - current_tickets)
+        days_until_raid = (tickets_needed + 29999) // 30000  # Round up
+
+        reset_hour = guild_reset_times[guild_id].get("resethour")
+        timezone = guild_reset_times[guild_id].get("timezone")
+        timeformat = guild_reset_times[guild_id].get("timeformat")
+        dst = guild_reset_times[guild_id].get("dst")
+
+        # Check if all required settings are provided
+        if reset_hour is None or timezone is None or timeformat is None or dst is None:
+            await ctx.respond("Please set your guild reset time and related settings (reset hour, timezone, time format, and DST) before using this command. You can do this by using /register guildactivity to set these settings for your server.")
+            return  # Stop further execution if settings are missing
+        
+        reset_datetime = calculate_next_reset_epoch(reset_hour, timeformat, timezone, dst, True)
+
+        if datetime.now(UTC) < reset_datetime:
+            # Count today as one of the days needed if we’ll reach 180k after today’s ticket gain
+            days_until_raid = max(0, days_until_raid - 1)
+        # Calculate potential next raid start time in epoch seconds
+        potential_raid_start_epoch = (
+            datetime.now(UTC).replace(hour=0, minute=0, second=0) + timedelta(days=days_until_raid, seconds=int(scheduled_raid_offset))
+        ).timestamp()
+        
+        await ctx.respond(
+            f"No active raid currently. The guild has `{current_tickets:,}` tickets and is missing `{tickets_needed:,}` tickets for a new raid.\n"
+            f"With a max contribution of `30,000` tickets per day, it will take approximately **{days_until_raid} day(s)** "
+            f"to reach 180,000 tickets for the next raid.\n\n"
+            f"> Potential start time for the next raid: <t:{int(potential_raid_start_epoch)}:F>."
+        )
 # endregion
 
+#region Helper Commands
+@bot.slash_command(
+    name="sync",
+    description="Syncs all commands to discord",
+)
+async def sync(ctx: discord.ApplicationContext):
+    await bot.sync_commands()
+    await ctx.respond("All commands synced to Discord")
+
+# endregion
 # region Looping Functions
 # Task that runs every 30 minutes
 @tasks.loop(minutes=30)
 async def update_mod_data():
     check_and_update_mod_data()
+    await update_all_characters_cache()
 
 @tasks.loop(minutes=1)
 @print_and_ignore_exceptions
 async def send_daily_message():
     for guild_id, reset_info in guild_reset_times.items():
-        if reset_info != None and reset_info != {}:
+        if reset_info != None and reset_info != {} and reset_info.get("dailymessages") != None and reset_info.get("dailymessages"):
             reset_hour = reset_info["resethour"]
             timezone = reset_info["timezone"]
             timeformat = reset_info["timeformat"]
@@ -1517,7 +1627,6 @@ async def send_daily_personal_message():
                     await user.send(embed=get_activity_message(day.strftime("%A"), True, next_guild_reset_time_str, next_reset_time_str))
 
 @tasks.loop(minutes=1)
-@print_and_ignore_exceptions
 async def check_pvp_ranks():   
     for user_id, user_info in ally_code_tracking.items():
         if user_info is not None and user_info != {} and user_info.get("ally_code") is not None:
@@ -1532,30 +1641,69 @@ async def check_raid_conditions():
     for guild_id, reset_info in guild_reset_times.items():
         if reset_info != None and reset_info != {}:
             # Check if raid launch conditions are met
-            raid_channel = reset_info.get("raid_channel_id", "")
-            if raid_channel != "":
+            raid_channel_id = reset_info.get("raid_channel_id", "")
+            if raid_channel_id != "":
+                guild = bot.get_guild(int(guild_id))
+                raid_channel = guild.get_channel(int(raid_channel_id)) if guild else None
                 guildname = reset_info.get("guildname")
                 current_tickets = reset_info.get("current_tickets", 0)
-                _, member_count, scheduled_raid_offset = get_guild_info(guildname) # guild_id, member_count, scheduled_raid_offset
+                scheduled_raid_offset = reset_info.get("scheduled_raid_offset", 0)
+                if not scheduled_raid_offset:
+                    _, _, scheduled_raid_offset = get_guild_info(guildname) # guild_id, member_count, scheduled_raid_offset
+                    guild_reset_times[guild_id]["scheduled_raid_offset"] = int(scheduled_raid_offset)
+                    save_guild_reset_times()
 
-                
-                # Calculate the target launch time
-                launch_datetime = datetime.now(UTC).replace(hour=0, minute=0, second=0) + timedelta(seconds=int(scheduled_raid_offset))
-                launch_epoch = launch_datetime.timestamp()
+                if scheduled_raid_offset != None:
+                    # Calculate the target launch time
+                    timezone = ZoneInfo(reset_info.get("timezone")) # TODO not sure if this will break in the future for other guilds
+                    guild_time = datetime.now(timezone) 
+                    day = guild_time.day
+                    launch_datetime = datetime.now(UTC).replace(hour=0, minute=0, second=0) + timedelta(seconds=int(scheduled_raid_offset))
+                    if (day != launch_datetime.day): # if its the next day for UTC but still the previous day for the guild
+                        launch_datetime = launch_datetime + timedelta(days=day-launch_datetime.day) # add or subtract day
+                    launch_epoch = launch_datetime.timestamp()
+                    if current_epoch >= launch_epoch:
+                        if current_tickets >= 180000:
+                            # Set raid end time: 2 days and 23 hours after launch
+                            raid_end_epoch = launch_epoch + (2 * 24 * 3600) + (23 * 3600)
+                            guild_reset_times[guild_id]["raid_end_epoch"] = int(raid_end_epoch)
+                            guild_reset_times[guild_id]["first_raid_reminder"] = False
+                            guild_reset_times[guild_id]["second_raid_reminder"] = False
 
-                if current_epoch >= launch_epoch and current_epoch < launch_epoch + 60:
-                    if current_tickets >= 180000:
-                        # Send the raid launch message
-                        if raid_channel:
-                            await raid_channel.send("🎉 The guild has accumulated 180,000 tickets! A new raid will start now! 🎉")
-                        
-                        # Decrease the tickets by 180,000
-                        guild_reset_times[guild_id]["current_tickets"] -= 180000
+                            # Decrease the tickets by 180,000
+                            guild_reset_times[guild_id]["current_tickets"] -= 180000
+                            save_guild_reset_times()
+
+                            # Send the raid launch message
+                            if raid_channel:
+                                await raid_channel.send(f"🎉 The guild has accumulated enough tickets and a new raid will start now!\n\n> Guild tickets have been decreased by 180k and are now at `{guild_reset_times[guild_id]["current_tickets"]:,}`")
+
+                # Check for reminders based on raid end time
+                raid_end_epoch = reset_info.get("raid_end_epoch")
+                if raid_end_epoch:
+                    time_until_end = raid_end_epoch - current_epoch
+
+                    if raid_channel and time_until_end > 0:  # Ensure the raid hasn't already ended
+                        # Check if 6 hours remain
+                        if time_until_end <= 12 * 3600 and not reset_info.get("second_raid_reminder"):
+                            await raid_channel.send(f"⏰ Raid ends in 12 hours!\n\n> Use Hotbot `/raids notify mindamage:0` to notify players who haven't attacked yet.\n\n*Anyone can use that command*")
+                            guild_reset_times[guild_id]["second_raid_reminder"] = True
+                            guild_reset_times[guild_id]["first_raid_reminder"] = True
+                            save_guild_reset_times()          
+                        # Check if 12 hours remain
+                        elif time_until_end <= 24 * 3600 and not reset_info.get("first_raid_reminder"):
+                            await raid_channel.send(f"⏰ Raid ends in 24 hours!\n\n> Use Hotbot `/raids notify mindamage:0` to notify players who haven't attacked yet.\n\n*Anyone can use that command*")
+                            guild_reset_times[guild_id]["first_raid_reminder"] = True
+                            save_guild_reset_times()
+                    else:
+                        guild_reset_times[guild_id]["raid_end_epoch"] = 0
+                        guild_reset_times[guild_id]["first_raid_reminder"] = False
+                        guild_reset_times[guild_id]["second_raid_reminder"] = False
                         save_guild_reset_times()
 
 @update_mod_data.before_loop
 async def before_update_mod_data():
-    print("Checking and updating mod data...")
+    print("Checking and updating mod data and character cache...")
     await bot.wait_until_ready()
     print("Polling every 30 minutes to check and update mod data!")
 
@@ -1590,6 +1738,10 @@ def parse_ticket_message(message, monitorAll: bool):
     total_members_missed = 0
     total_tickets_missed = 0
     
+    if "[All players" in message and "met the required 600 tickets" in message:
+        return 0, 0 # return 0 missed if everyone got the 600 tickets
+
+    # monitorAll was just for when I needed to test the ticket parsing
     if monitorAll:
         pattern = r'\b\w+\s+\(.*(\d+).*/600\)'
         matches = re.findall(pattern, message)
@@ -1674,13 +1826,17 @@ async def on_message(message):
         if referenced_message.attachments:
             await process_attachment(referenced_message)
 
+    # Check for phrases like "good bot" and respond
+    # Can move into previous if statement to only reply on mention
+    if any(phrase in message.content.lower() for phrase in ["good bot", "great bot", "nice bot"]):
+        await message.channel.send("Beep boop! Thanks! <:Doge:1275133667097837600>")
 
     if message.channel.id in channels:
         total_members_missed, total_tickets_missed = parse_ticket_message(message.content, False)
         member_message = ""
         raid_message = ""
 
-        if total_members_missed is not None and total_members_missed > 0:
+        if total_members_missed is not None and total_members_missed >= 0:
             # I also want to check if the guild that has monitoring enabled has a guild name in our json so I can check their members
             guildname = guild_reset_times[str(message.guild.id)]["guildname"]
             if guildname is not None:
