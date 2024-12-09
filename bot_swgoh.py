@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import requests
 import re
 from update_mod_data import check_and_update_mod_data, get_valid_mod_characters, get_character_mod_info, find_characters_with_mod
-from character_caching import update_all_characters_cache, get_valid_all_characters, load_character
+from character_caching import update_all_characters_cache, get_valid_all_characters, load_character, load_character_base_id
 from png_generator import create_image_with_mods
 from extract_inventory import parse_inventory_file
 from functools import wraps
@@ -258,13 +258,21 @@ def fetch_pvp_ranks(ally_code: str):
         utc_offset = response.json().get('localTimeZoneOffsetMinutes', 0)
         pvp_profile = response.json().get('pvpProfile', [])
         name = response.json().get('name', "")
-        ranks = {
-            entry['tab']: {
+        ranks = {}
+
+        for entry in pvp_profile:
+            squad_lineup = []
+            for unit in entry['squad']['cell']:
+                unit_def_id = unit['unitDefId']
+                base_name = unit_def_id.split(':')[0]  # Extract the part before the colon
+                character_info = load_character_base_id(base_name)  # Fetch character data
+                squad_lineup.append(character_info)  # Add to lineup
+
+            ranks[entry['tab']] = {
                 'rank': entry['rank'],
-                'lastSaveTime': entry['squad']['lastSaveTime']
+                'lastSaveTime': entry['squad']['lastSaveTime'],
+                'squad_lineup': squad_lineup  # Include the lineup in the ranking object
             }
-            for entry in pvp_profile
-        }
 
         return ranks, name, utc_offset
     else:
@@ -417,6 +425,46 @@ def get_payout_embed(payout_players):
 
     return embed
 
+def get_squad_update_embed(updated_squads):
+    if not updated_squads:
+        return None  # No players to display
+
+    # Create an Embed object
+    embed = discord.Embed(color=0x8B10E3, title="Squad Updates")
+
+    # Group players by their save time
+    squad_groups = {}
+    for player in updated_squads:
+        # Convert save time to Discord-friendly timestamp
+        save_time_in_seconds = int(player['save_time']) // 1000
+        save_time_str = f"<t:{save_time_in_seconds}:f>"
+
+        # Initialize group if not already present
+        if save_time_str not in squad_groups:
+            squad_groups[save_time_str] = []
+
+        # Generate squad lineup string
+        unit_names = ", ".join([unit['name'] for unit in player['squad_lineup']])
+        squad_groups[save_time_str].append({
+            "name": player["name"],
+            "unit_names": unit_names,
+            "image": player['squad_lineup'][0]['image']  # Get the image of the first unit
+        })
+
+    # Add each save time group to the embed
+    for save_time, squad_info in squad_groups.items():
+        # Add the first player's squad image as the embed's thumbnail
+        if squad_info:
+            embed.set_thumbnail(url=squad_info[0]['image'])
+
+        # Add the group of squads to the embed
+        squad_text = "\n".join(
+            [f"**{player['name']}**: {player['unit_names']}" for player in squad_info]
+        )
+        embed.add_field(name=save_time, value=squad_text, inline=False)
+
+    return embed
+
 def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
     arena_tab_num = 2 if arena_type == "fleetarena" else 1
     ally_code = user_info.get("ally_code")
@@ -428,13 +476,22 @@ def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
             # Compare current ranks with stored ranks
             is_payout, payout_time_epoch = check_payout_time(utc_offset, arena_type)
 
-            if user_info.get(arena_type, {}).get("rank") != current_ranks[arena_tab_num]["rank"] or getAll or is_payout:
+            if (
+                    user_info.get(arena_type, {}).get("rank") != current_ranks[arena_tab_num]["rank"] or 
+                    user_info.get(arena_type, {}).get("lastSaveTime") != current_ranks[arena_tab_num].get("lastSaveTime") or 
+                    getAll or 
+                    is_payout
+                ):
                 previous_rank = ally_code_tracking[user_id][arena_type].get("previous_rank", ally_code_tracking[user_id][arena_type]["rank"]) if getAll else ally_code_tracking[user_id][arena_type]["rank"]
-                save_time = current_ranks
+                save_time = current_ranks[arena_tab_num]["lastSaveTime"]
+                squad_updated = ally_code_tracking[user_id][arena_type].get("lastSaveTime") != save_time
+                squad_lineup = current_ranks[arena_tab_num]["squad_lineup"]
                 # Update stored ranks
                 ally_code_tracking[user_id][arena_type]["name"] = name
                 ally_code_tracking[user_id][arena_type]["rank"] = current_ranks[arena_tab_num]["rank"]
                 ally_code_tracking[user_id][arena_type]["previous_rank"] = previous_rank
+                ally_code_tracking[user_id][arena_type]["lastSaveTime"] = save_time
+                ally_code_tracking[user_id][arena_type]["squad_lineup"] = squad_lineup
                 
                 # Save the updated settings into the JSON file
                 save_ally_code_tracking()
@@ -444,7 +501,10 @@ def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
                         "rank": current_ranks[arena_tab_num]["rank"],  # Current rank
                         "previous_rank": previous_rank,  # Previous rank
                         "payout_time_epoch": payout_time_epoch,
-                        "is_payout": is_payout
+                        "is_payout": is_payout, 
+                        "squad_updated": squad_updated,
+                        "save_time": save_time,
+                        "squad_lineup": squad_lineup
                 }
                 player_info_list.append(player_info)
     except TypeError as e:
@@ -457,12 +517,22 @@ def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
                 if opponent_current_ranks is not None:
                     is_opponent_payout, payout_time_epoch = check_payout_time(opponent_utc_offset, arena_type)
 
-                    if opponent["rank"] != opponent_current_ranks[arena_tab_num]["rank"] or getAll or is_opponent_payout:
+                    if (opponent["rank"] != opponent_current_ranks[arena_tab_num]["rank"] or 
+                        opponent.get("lastSaveTime", {}) != opponent_current_ranks[arena_tab_num].get("lastSaveTime") or
+                        getAll or 
+                        is_opponent_payout):
                         opponent_previous_rank = opponent.get("previous_rank", opponent["rank"]) if getAll else opponent["rank"]
+                        save_time = opponent_current_ranks[arena_tab_num]["lastSaveTime"]
+                        squad_updated = opponent.get("lastSaveTime") != save_time
+                        squad_lineup = opponent_current_ranks[arena_tab_num]["squad_lineup"]
+
                         # Update opponent's stored rank
                         opponent["name"] = opponent_name
                         opponent["rank"] = opponent_current_ranks[arena_tab_num]["rank"]
                         opponent["previous_rank"] = opponent_previous_rank
+                        opponent["lastSaveTime"] = save_time
+                        opponent["squad_lineup"] = squad_lineup
+
                         # Save the updated settings into the JSON file
                         save_ally_code_tracking()
 
@@ -472,7 +542,10 @@ def get_player_info(user_id, user_info, arena_type: str, getAll: bool):
                             "rank": opponent_current_ranks[arena_tab_num]["rank"],  # Current rank
                             "previous_rank": opponent_previous_rank,  # Previous rank
                             "payout_time_epoch": payout_time_epoch,
-                            "is_payout": is_opponent_payout
+                            "is_payout": is_opponent_payout,
+                            "squad_updated": squad_updated,
+                            "save_time": save_time,
+                            "squad_lineup": squad_lineup
                         }
                         player_info_list.append(player_info)
             except TypeError as e:
@@ -534,9 +607,11 @@ async def send_arena_monitoring_messages(user_id, user_info, arena_type: str):
         # Order the list of players by rank
         # Separate players with payout and rank changes
         payout_players = [player for player in player_info_list if player["is_payout"]]
+        updated_squads = [player for player in player_info_list if player["squad_updated"]]
         rank_change_players = [player for player in player_info_list if player["rank"] != player["previous_rank"]]
 
         sorted_player_info_list = sorted(rank_change_players, key=lambda x: x["rank"])
+        sorted_updated_squads = sorted(updated_squads, key=lambda x: x["rank"])
 
         # Determine how many players' ranks changed
         num_rank_changes = sum(1 for player in sorted_player_info_list if player["rank"] != player["previous_rank"])
@@ -557,6 +632,15 @@ async def send_arena_monitoring_messages(user_id, user_info, arena_type: str):
         if payout_players != []:
             message = get_payout_embed(payout_players)
             if message is not None:
+                messages_to_send.append(message)
+
+        if sorted_updated_squads != []:
+            message = get_squad_update_embed(sorted_updated_squads)
+            if message is not None:
+                # guild = bot.get_guild(618924061677846528)
+                # if guild:
+                #     channel = guild.get_channel(1262861775649509550)
+                #     await channel.send(embed=message)
                 messages_to_send.append(message)
 
         # section for sending the actual messages
@@ -1650,33 +1734,52 @@ async def check_raid_conditions():
                 scheduled_raid_offset = reset_info.get("scheduled_raid_offset", 0)
                 if not scheduled_raid_offset:
                     _, _, scheduled_raid_offset = get_guild_info(guildname) # guild_id, member_count, scheduled_raid_offset
-                    guild_reset_times[guild_id]["scheduled_raid_offset"] = int(scheduled_raid_offset)
-                    save_guild_reset_times()
+                    if scheduled_raid_offset != None:
+                        guild_reset_times[guild_id]["scheduled_raid_offset"] = int(scheduled_raid_offset)
+                        save_guild_reset_times()
 
-                if scheduled_raid_offset != None:
-                    # Calculate the target launch time
-                    timezone = ZoneInfo(reset_info.get("timezone")) # TODO not sure if this will break in the future for other guilds
+                # Check and calculate launch time
+                if scheduled_raid_offset is not None:
+                    timezone = ZoneInfo(reset_info.get("timezone"))  # Adjust timezone dynamically
                     guild_time = datetime.now(timezone) 
                     day = guild_time.day
-                    launch_datetime = datetime.now(UTC).replace(hour=0, minute=0, second=0) + timedelta(seconds=int(scheduled_raid_offset))
-                    if (day != launch_datetime.day): # if its the next day for UTC but still the previous day for the guild
-                        launch_datetime = launch_datetime + timedelta(days=day-launch_datetime.day) # add or subtract day
-                    launch_epoch = launch_datetime.timestamp()
-                    if current_epoch >= launch_epoch:
-                        if current_tickets >= 180000:
-                            # Set raid end time: 2 days and 23 hours after launch
-                            raid_end_epoch = launch_epoch + (2 * 24 * 3600) + (23 * 3600)
-                            guild_reset_times[guild_id]["raid_end_epoch"] = int(raid_end_epoch)
-                            guild_reset_times[guild_id]["first_raid_reminder"] = False
-                            guild_reset_times[guild_id]["second_raid_reminder"] = False
 
-                            # Decrease the tickets by 180,000
-                            guild_reset_times[guild_id]["current_tickets"] -= 180000
+                    # Calculate the target launch time
+                    launch_datetime = datetime.now(UTC).replace(hour=0, minute=0, second=0) + timedelta(seconds=int(scheduled_raid_offset))
+                    if day != launch_datetime.day:  # Adjust for potential day mismatch
+                        launch_datetime += timedelta(days=day - launch_datetime.day)
+                    launch_epoch = launch_datetime.timestamp()
+
+                    # Verify if the launch time has passed
+                    if current_epoch >= launch_epoch:
+                        # Re-query the guild information to verify scheduled_raid_offset
+                        _, _, new_scheduled_raid_offset = get_guild_info(guildname)
+                        if new_scheduled_raid_offset != None and int(new_scheduled_raid_offset) != scheduled_raid_offset:
+                            scheduled_raid_offset = int(new_scheduled_raid_offset)
+                            guild_reset_times[guild_id]["scheduled_raid_offset"] = scheduled_raid_offset
                             save_guild_reset_times()
 
-                            # Send the raid launch message
-                            if raid_channel:
-                                await raid_channel.send(f"🎉 The guild has accumulated enough tickets and a new raid will start now!\n\n> Guild tickets have been decreased by 180k and are now at `{guild_reset_times[guild_id]["current_tickets"]:,}`")
+                            # Recalculate launch time with the updated offset
+                            launch_datetime = datetime.now(UTC).replace(hour=0, minute=0, second=0) + timedelta(seconds=scheduled_raid_offset)
+                            if day != launch_datetime.day:
+                                launch_datetime += timedelta(days=day - launch_datetime.day)
+                            launch_epoch = launch_datetime.timestamp()
+
+                        # Proceed with checks after re-verification
+                        if current_epoch >= launch_epoch and current_tickets >= 180000:
+                                # Set raid end time: 2 days and 23 hours after launch
+                                raid_end_epoch = launch_epoch + (2 * 24 * 3600) + (23 * 3600)
+                                guild_reset_times[guild_id]["raid_end_epoch"] = int(raid_end_epoch)
+                                guild_reset_times[guild_id]["first_raid_reminder"] = False
+                                guild_reset_times[guild_id]["second_raid_reminder"] = False
+
+                                # Decrease the tickets by 180,000
+                                guild_reset_times[guild_id]["current_tickets"] -= 180000
+                                save_guild_reset_times()
+
+                                # Send the raid launch message
+                                if raid_channel:
+                                    await raid_channel.send(f"🎉 The guild has accumulated enough tickets and a new raid will start now!\n\n> Guild tickets have been decreased by 180k and are now at `{guild_reset_times[guild_id]["current_tickets"]:,}`\n\n The raid will end <t:{int(raid_end_epoch)}:R>.")
 
                 # Check for reminders based on raid end time
                 raid_end_epoch = reset_info.get("raid_end_epoch")
@@ -1686,13 +1789,13 @@ async def check_raid_conditions():
                     if raid_channel and time_until_end > 0:  # Ensure the raid hasn't already ended
                         # Check if 6 hours remain
                         if time_until_end <= 12 * 3600 and not reset_info.get("second_raid_reminder"):
-                            await raid_channel.send(f"⏰ Raid ends in 12 hours!\n\n> Use Hotbot `/raids notify mindamage:0` to notify players who haven't attacked yet.\n\n*Anyone can use that command*")
+                            await raid_channel.send(f"⏰ Raid ends in 12 hours!\n\n> Use Hotbot `/raids notify mindamage:0` to notify players who haven't attacked yet.\n\n*Anyone with a Hotbot connection can use that command*")
                             guild_reset_times[guild_id]["second_raid_reminder"] = True
                             guild_reset_times[guild_id]["first_raid_reminder"] = True
                             save_guild_reset_times()          
                         # Check if 12 hours remain
                         elif time_until_end <= 24 * 3600 and not reset_info.get("first_raid_reminder"):
-                            await raid_channel.send(f"⏰ Raid ends in 24 hours!\n\n> Use Hotbot `/raids notify mindamage:0` to notify players who haven't attacked yet.\n\n*Anyone can use that command*")
+                            await raid_channel.send(f"⏰ Raid ends in 24 hours!\n\n> Use Hotbot `/raids notify mindamage:0` to notify players who haven't attacked yet.\n\n*Anyone with a Hotbot connection can use that command*")
                             guild_reset_times[guild_id]["first_raid_reminder"] = True
                             save_guild_reset_times()
                     else:
@@ -1738,7 +1841,7 @@ def parse_ticket_message(message, monitorAll: bool):
     total_members_missed = 0
     total_tickets_missed = 0
     
-    if "[All players" in message and "met the required 600 tickets" in message:
+    if "[All players" in message and "met the required" in message:
         return 0, 0 # return 0 missed if everyone got the 600 tickets
 
     # monitorAll was just for when I needed to test the ticket parsing
@@ -1797,14 +1900,16 @@ async def process_attachment(message):
                 await attachment.save(file_path)
                 
                 # Call the parsing function
-                csv_file_path = parse_inventory_file(file_path)
+                csv_file_path, gear_import_path = parse_inventory_file(file_path)
                 
                 # Send the output CSV file to the user
                 await message.channel.send("I parsed your inventory.json file into a readable CSV! Beep boop!\n\n> Feel free to reply to a message with an inventory.json file and tag me! If you are registered with my `/register allycode` command, I'll respond.", file=discord.File(csv_file_path))
+                await message.channel.send("I also created a file of javascript code to import your gear into https://gear.swgohevents.com/updateGear. You will have to paste the code into the console and it should update all of your equipment on their website.", file=discord.File(gear_import_path))
                 
                 # Clean up
                 os.remove(file_path)
                 os.remove(csv_file_path)
+                os.remove(gear_import_path)
 
                 return
     

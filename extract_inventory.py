@@ -48,6 +48,21 @@ def check_and_update_loc_file():
         print(f"An error occurred while checking/updating the localization file: {e}")
         print("Proceeding with the current version of Loc_ENG_US.txt.json.")
 
+def create_gear_script(json_data, output_file="gear_script.js", template_file="gear_script_template.js"):
+    # Read the JavaScript template
+    with open(template_file, 'r', encoding='utf-8') as template:
+        js_template = template.read()
+    
+    # Replace the placeholder with the JSON data
+    json_string = json.dumps(json_data, indent=4)
+    js_script = js_template.replace("{{GEAR_DATA_PLACEHOLDER}}", json_string)
+    
+    # Write the final script to the output file
+    with open(output_file, 'w', encoding='utf-8') as output:
+        output.write(js_script)
+    
+    print(f"Generated script saved to {output_file}")
+
 def parse_inventory_file(inventory_file_path):
     check_and_update_loc_file()
 
@@ -67,6 +82,7 @@ def parse_inventory_file(inventory_file_path):
     # Prepare filenames with ally code
     output_file = f'{ally_code}_inventory_output.csv'
     json_output_file = f'{ally_code}_inventory_output.json'
+    gear_import_file = f'{ally_code}_gear_script.js'
     output_lines = []
     json_data = []
 
@@ -133,19 +149,19 @@ def parse_inventory_file(inventory_file_path):
             star_count = unit_stars.get(unit_key, 0)
             item_name = localization.get(loc_key, loc_key)
             output_line = f"\"{item_name}\", \"{star_count};{quantity}\""
-            json_data.append({
-                "item_name": item_name,
-                "star_count": star_count,
-                "quantity": quantity
-            })
+            # json_data.append({
+            #     "item_name": item_name,
+            #     "star_count": star_count,
+            #     "quantity": quantity
+            # })
         else:
             loc_key = f"{item_id}_NAME"
             item_name = localization.get(loc_key, loc_key)
             output_line = f"\"{item_name}\", \"{quantity}\""
-            json_data.append({
-                "item_name": item_name,
-                "quantity": quantity
-            })
+            # json_data.append({
+            #     "item_name": item_name,
+            #     "quantity": quantity
+            # })
 
         # Format the output line
         output_lines.append(output_line)
@@ -162,7 +178,9 @@ def parse_inventory_file(inventory_file_path):
     # print(f"Output written to {output_file}")
     # print(f"Json Output written to {json_output_file}")
 
-    return output_file
+    create_gear_script(json_data, gear_import_file)
+
+    return output_file, gear_import_file
 
 # Example usage if run as a standalone script
 if __name__ == "__main__":

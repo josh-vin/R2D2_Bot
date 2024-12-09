@@ -26,6 +26,18 @@ def load_character(character_name: str):
     
     return None  # Character not found
 
+def load_character_base_id(character_base_id: str):
+    character_data = load_character_data()
+    if not character_data:
+        return None  # Cache doesn't exist or is empty
+
+    # Search for the character object by name
+    for character in character_data:
+        if character['base_id'].lower() == character_base_id.lower():
+            return character
+    
+    return None  # Character not found
+
 
 def is_cache_expired(cache_file, max_age_days=1):
     if not os.path.exists(cache_file):
@@ -53,10 +65,10 @@ async def fetch_all_characters_and_ships():
     
     # Extract and combine the name and image for characters and ships
     combined_data = [
-        {"name": item["name"], "image": item["image"], "type": "character"}
+        {"name": item["name"], "image": item["image"], "type": "character", "base_id": item["base_id"]}
         for item in characters_data
     ] + [
-        {"name": item["name"], "image": item["image"], "type": "ship"}
+        {"name": item["name"], "image": item["image"], "type": "ship", "base_id": item["base_id"]}
         for item in ships_data
     ]
     return combined_data
