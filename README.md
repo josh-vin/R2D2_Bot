@@ -1,4 +1,5 @@
 # R2D2_Bot
+Using python `3.13.2`
 
 `python -m venv venv` to create your Virtual Enrivonment
 `venv\Scripts\activate` to activate the Virtual Environment
