@@ -4,8 +4,20 @@ import json
 import os
 from datetime import datetime, timedelta
 import discord
+from functools import wraps
 
 CACHE_FILE = "all_characters_cache.json"
+
+def print_and_ignore_exceptions(func):
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except discord.HTTPException as e:
+            print(f"Discord HTTP error in {func.__name__}: {str(e)}")
+        except Exception as e:
+            print(f"Unexpected error in {func.__name__}: {str(e)}")
+    return wrapper
 
 def load_character_data():
     if os.path.exists(CACHE_FILE):
@@ -45,23 +57,28 @@ def is_cache_expired(cache_file, max_age_days=1):
     cache_time = datetime.fromtimestamp(os.path.getmtime(cache_file))
     return datetime.now() - cache_time > timedelta(days=max_age_days)
 
-async def fetch_from_api(url):
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            if response.status == 200:
+async def fetch_from_api(url, retries=3):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+    }
+    for _ in range(retries):
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(url) as response:
+                if response.status == 403:
+                    print("Rate limited. Waiting before retrying...")
+                    await asyncio.sleep(1)  # wait before retrying
+                    continue
+                response.raise_for_status()
                 return await response.json()
-            else:
-                raise Exception(f"Failed to fetch data from {url}: {response.status}")
+    raise Exception(f"Failed to fetch {url} after {retries} retries")
 
 async def fetch_all_characters_and_ships():
     characters_url = "https://swgoh.gg/api/characters"
     ships_url = "https://swgoh.gg/api/ships"
     
     # Fetch characters and ships concurrently
-    characters_data, ships_data = await asyncio.gather(
-        fetch_from_api(characters_url),
-        fetch_from_api(ships_url)
-    )
+    characters_data = await fetch_from_api(characters_url)
+    ships_data = await fetch_from_api(ships_url)
     
     # Extract and combine the name and image for characters and ships
     combined_data = [
@@ -90,6 +107,7 @@ async def update_all_characters_cache():
         except Exception as e:
             print(f"Error updating cache: {e}")
 
+@print_and_ignore_exceptions
 async def get_valid_all_characters(ctx: discord.AutocompleteContext):
     text = ctx.value
 

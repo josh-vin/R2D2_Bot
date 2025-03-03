@@ -3,6 +3,18 @@ import requests
 from bs4 import BeautifulSoup
 import json
 import discord
+from functools import wraps
+
+def print_and_ignore_exceptions(func):
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except discord.HTTPException as e:
+            print(f"Discord HTTP error in {func.__name__}: {str(e)}")
+        except Exception as e:
+            print(f"Unexpected error in {func.__name__}: {str(e)}")
+    return wrapper
 
 # Load the JSON data from the file
 def load_mod_data():
@@ -54,6 +66,7 @@ def load_character_names():
     return [character['character_name'] for character in mod_data]
 
 # Function to autocomplete character names
+@print_and_ignore_exceptions
 async def get_valid_mod_characters(ctx: discord.AutocompleteContext):
     text = ctx.value
     character_names = load_character_names()

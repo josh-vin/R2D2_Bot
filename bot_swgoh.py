@@ -205,6 +205,7 @@ def increment_tickets(guild_id, tickets_today):
     save_guild_reset_times()
 
 # Function to provide hour options based on the selected time format
+@print_and_ignore_exceptions
 async def get_hour_options(ctx: discord.AutocompleteContext):
     time_format = ctx.options["timeformat"]
     text = ctx.value
@@ -212,7 +213,8 @@ async def get_hour_options(ctx: discord.AutocompleteContext):
         return [str(i) for i in range(0, 24) if str(i).startswith(text)]
     else:
         return [str(i) for i in range(1, 13) if str(i).startswith(text)]
-    
+
+@print_and_ignore_exceptions
 async def get_valid_timezones(ctx: discord.AutocompleteContext):
     text = ctx.value
     filtered_timezones = [timezone for timezone in valid_timezones if text.lower() in timezone.lower()]
@@ -425,43 +427,24 @@ def get_payout_embed(payout_players):
 
     return embed
 
-def get_squad_update_embed(updated_squads):
-    if not updated_squads:
-        return None  # No players to display
-
+def get_squad_update_embed(updated_squad):
     # Create an Embed object
-    embed = discord.Embed(color=0x8B10E3, title="Squad Updates")
+    embed = discord.Embed(color=0x8B10E3, title=f"{updated_squad["name"]} Squad Update")
 
-    # Group players by their save time
-    squad_groups = {}
-    for player in updated_squads:
-        # Convert save time to Discord-friendly timestamp
-        save_time_in_seconds = int(player['save_time']) // 1000
-        save_time_str = f"<t:{save_time_in_seconds}:f>"
+    # Convert save time to Discord-friendly timestamp
+    save_time_in_seconds = int(updated_squad['save_time']) // 1000
+    save_time_str = f"<t:{save_time_in_seconds}:f>"
 
-        # Initialize group if not already present
-        if save_time_str not in squad_groups:
-            squad_groups[save_time_str] = []
 
-        # Generate squad lineup string
-        unit_names = ", ".join([unit['name'] for unit in player['squad_lineup']])
-        squad_groups[save_time_str].append({
-            "name": player["name"],
-            "unit_names": unit_names,
-            "image": player['squad_lineup'][0]['image']  # Get the image of the first unit
-        })
+    # Generate squad lineup string
+    unit_names = ", ".join([unit['name'] for unit in updated_squad['squad_lineup']])
+    # Add the first player's squad image as the embed's thumbnail
+    if updated_squad['squad_lineup'] != None:
+        embed.set_thumbnail(url=updated_squad['squad_lineup'][0]['image'])
 
-    # Add each save time group to the embed
-    for save_time, squad_info in squad_groups.items():
-        # Add the first player's squad image as the embed's thumbnail
-        if squad_info:
-            embed.set_thumbnail(url=squad_info[0]['image'])
-
-        # Add the group of squads to the embed
-        squad_text = "\n".join(
-            [f"**{player['name']}**: {player['unit_names']}" for player in squad_info]
-        )
-        embed.add_field(name=save_time, value=squad_text, inline=False)
+    # Add the group of squads to the embed
+    squad_text = unit_names
+    embed.add_field(name=save_time_str, value=squad_text, inline=False)
 
     return embed
 
@@ -635,13 +618,14 @@ async def send_arena_monitoring_messages(user_id, user_info, arena_type: str):
                 messages_to_send.append(message)
 
         if sorted_updated_squads != []:
-            message = get_squad_update_embed(sorted_updated_squads)
-            if message is not None:
-                # guild = bot.get_guild(618924061677846528)
-                # if guild:
-                #     channel = guild.get_channel(1262861775649509550)
-                #     await channel.send(embed=message)
-                messages_to_send.append(message)
+            for updated_squad in sorted_updated_squads:
+                message = get_squad_update_embed(updated_squad)
+                if message is not None:
+                    # guild = bot.get_guild(618924061677846528)
+                    # if guild:
+                    #     channel = guild.get_channel(1262861775649509550)
+                    #     await channel.send(embed=message)
+                    messages_to_send.append(message)
 
         # section for sending the actual messages
         if user_info.get(arena_type, {}).get("guild_id") and user_info.get(arena_type, {}).get("channel_id"):
@@ -881,9 +865,9 @@ async def subscribe(ctx: discord.ApplicationContext, timezone: str, timeformat: 
 )
 async def unsubscribe(ctx: discord.ApplicationContext):
     # Clear the entry for the guild
-    guild_reset_times[str(ctx.guild_id)] = {}
+    personal_reset_times[str(ctx.user.id)] = {}
     
-    save_guild_reset_times()
+    save_personal_reset_times()
     await ctx.respond(f"User has been unsubscribed successfully.")
 
 # endregion
@@ -1141,6 +1125,7 @@ async def mods(ctx: discord.ApplicationContext, character: str):
     with open(output_image_path, 'rb') as image_file:
         await ctx.respond(file=discord.File(image_file, 'mod_info_image.png'))
 
+@print_and_ignore_exceptions
 async def primary_stat_autocomplete(ctx: discord.AutocompleteContext):
     mod_type = ctx.options.get("mod_type")
     if mod_type:
@@ -1350,7 +1335,7 @@ async def add_player(ctx: discord.ApplicationContext, guild_name: str, player_na
                 # Save the updated settings into the JSON file
                 save_ally_code_tracking()
 
-                await ctx.respond(f'Player {player_name or ally_code} added successfully to <@{user_id}>\'s fleet arena tracking at Rank {fleet_rank}!')
+                await ctx.respond(f'Player {player_name or ally_code} added successfully to <@{user_id}>\'s fleet arena tracking at Rank {fleet_rank}!\n\nAlly code: {ally_code}')
         else:
             await ctx.respond(f"Failed to retrieve fleet rank for player {player_name or ally_code}.")
     else:
