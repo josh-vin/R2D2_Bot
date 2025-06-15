@@ -1,8 +1,13 @@
 import requests
 import sys
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 def get_guild_info(guild_name):
-    url = 'http://localhost:5678/getGuilds'
+    url = f'{os.getenv("COMLINK_API")}/getGuilds'
     payload = {
         "payload": {
             "filterType": 4,
@@ -28,7 +33,7 @@ def get_guild_info(guild_name):
         return None, None, None
 
 def get_player_id_from_guild(guild_id, player_name):
-    url = 'http://localhost:5678/guild'
+    url = f'{os.getenv("COMLINK_API")}/guild'
     payload = {
         "payload": {
             "guildId": guild_id,
@@ -50,7 +55,7 @@ def get_player_id_from_guild(guild_id, player_name):
         return None
 
 def get_player_ally_code_by_id(player_id):
-    url = 'http://localhost:5678/player'
+    url = f'{os.getenv("COMLINK_API")}/player'
     payload = {
         "payload": {
             "playerId": player_id

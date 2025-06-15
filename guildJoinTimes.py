@@ -1,8 +1,13 @@
 import requests
 from datetime import datetime
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 def fetch_guild_members():
-    url = 'http://localhost:5678/guild'
+    url = f'{os.getenv("COMLINK_API")}/guild'
     payload = {
         "payload": {
             "guildId": "jb7VVuWETreqtBkJmVx1Tw",

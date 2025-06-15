@@ -248,7 +248,7 @@ def calculate_next_reset_epoch(resethour, timeformat, timezone, dst, today, pers
     return next_reset_time
 
 def fetch_pvp_ranks(ally_code: str):
-    url = 'http://localhost:5678/playerArena'
+    url = f'{os.getenv("COMLINK_API")}/playerArena'
     payload = {
         "payload": {
             "allyCode": ally_code
