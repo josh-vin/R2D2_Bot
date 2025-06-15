@@ -1,0 +1,130 @@
+### Variables
+@baseUrl = https://swgoh.plexiverse.net
+@format = application/json
+
+### Get Player Arena Data
+# Used in fetch_pvp_ranks function
+POST {{baseUrl}}/playerArena
+Content-Type: {{format}}
+
+{
+  "payload": {
+    "allyCode": "311527188"
+  }
+}
+
+### Get Player Profile
+POST {{baseUrl}}/player
+Content-Type: {{format}}
+
+{
+  "payload": {
+    "allyCode": "311527188"
+  }
+}
+
+### Get Guild Info
+# Used in get_guild_info function
+POST {{baseUrl}}/guild
+Content-Type: {{format}}
+
+{
+  "payload": {
+    "guildName": "Mustafarmers"
+  }
+}
+
+### Get Guild Members by ID
+# Used in get_player_id_from_guild function
+POST {{baseUrl}}/guild
+Content-Type: {{format}}
+
+{
+  "payload": {
+    "guildId": "YOUR_GUILD_ID"
+  }
+}
+
+### Get Player Info by ID
+# Used in get_player_ally_code_by_id function
+POST {{baseUrl}}/player
+Content-Type: {{format}}
+
+{
+  "payload": {
+    "playerId": "PLAYER_ID_HERE"
+  }
+}
+
+### Get Unit List
+# Useful for character caching operations
+POST {{baseUrl}}/data
+Content-Type: {{format}}
+
+{
+  "payload": {
+    "collection": "unitsList"
+  }
+}
+
+### Get Character Definitions
+# Useful for character_caching.py
+POST {{baseUrl}}/data
+Content-Type: {{format}}
+
+{
+  "payload": {
+    "collection": "characterDefinitions"
+  }
+}
+
+### Get Player's Character Inventory
+# Useful for extract_inventory.py
+POST {{baseUrl}}/playerArena
+Content-Type: {{format}}
+
+{
+  "payload": {
+    "allyCode": "311527188",
+    "includeMods": true
+  }
+}
+
+### Get Player's Mod Inventory
+# For update_mod_data.py
+POST {{baseUrl}}/playerArena
+Content-Type: {{format}}
+
+{
+  "payload": {
+    "allyCode": "311527188",
+    "includeMods": true
+  }
+}
+
+### Get Guild Raid Information
+# For guild raid tracking
+POST {{baseUrl}}/guild
+Content-Type: {{format}}
+
+{
+  "payload": {
+    "guildId": "YOUR_GUILD_ID",
+    "includeRecentRaidResult": true
+  }
+}
+
+### Get Events Schedule
+# May be useful for planned features
+POST {{baseUrl}}/getEvents
+Content-Type: {{format}}
+
+{
+  "payload": {}
+}
+
+### Notes:
+# - Replace sample ally codes with real ones for testing
+# - Replace YOUR_GUILD_ID with an actual guild ID
+# - Some endpoints may require additional parameters based on the API documentation
+# - Add more specific endpoints as needed for your implementation

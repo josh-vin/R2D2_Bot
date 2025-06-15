@@ -1,0 +1,18 @@
+[Unit]
+Description=R2D2 SWGOH Discord Bot
+After=network.target
+
+[Service]
+Type=simple
+User=your_linux_username
+WorkingDirectory=/home/your_linux_username/R2D2_Bot
+# Use the Python from virtual environment
+ExecStart=/home/your_linux_username/R2D2_Bot/venv/bin/python /home/your_linux_username/R2D2_Bot/bot_swgoh.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=r2d2bot
+
+[Install]
+WantedBy=multi-user.target
