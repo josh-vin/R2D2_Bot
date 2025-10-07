@@ -25,14 +25,18 @@ Content-Type: {{format}}
 
 ### Get Guild Info
 # Used in get_guild_info function
-POST {{baseUrl}}/guild
+POST {{baseUrl}}/getGuilds
 Content-Type: {{format}}
 
 {
-  "payload": {
-    "guildName": "Mustafarmers"
-  }
-}
+        "payload": {
+            "filterType": 4,
+            "name": "Orden de Nihil",
+            "startIndex": 0,
+            "count": 10
+        },
+        "enums": false
+    }
 
 ### Get Guild Members by ID
 # Used in get_player_id_from_guild function
@@ -41,7 +45,8 @@ Content-Type: {{format}}
 
 {
   "payload": {
-    "guildId": "YOUR_GUILD_ID"
+    "guildId": "F7CifF9QSaq4NmChxYhrEg",
+    "includeRecentGuildActivityInfo": true
   }
 }
 
@@ -52,7 +57,7 @@ Content-Type: {{format}}
 
 {
   "payload": {
-    "playerId": "PLAYER_ID_HERE"
+    "playerId": "ch1sWYBXTNGoEkkqP6qD3Q"
   }
 }
 
@@ -122,6 +127,12 @@ Content-Type: {{format}}
 {
   "payload": {}
 }
+
+### Get Characters from swgoh.gg
+# Needs api key
+# May be useful for planned features
+GET https://swgoh.gg/api/characters
+x-gg-bot-access: YOUR_API_KEY
 
 ### Notes:
 # - Replace sample ally codes with real ones for testing

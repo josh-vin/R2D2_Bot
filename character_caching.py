@@ -58,8 +58,11 @@ def is_cache_expired(cache_file, max_age_days=1):
     return datetime.now() - cache_time > timedelta(days=max_age_days)
 
 async def fetch_from_api(url, retries=3):
+    # Allow SWGOH API key to be provided via env var; fall back to placeholder which you said works for now
+    api_key = os.getenv('SWGOH_GG_API_KEY', 'YOUR_API_KEY')
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
+        'x-gg-bot-access': api_key
     }
     for _ in range(retries):
         async with aiohttp.ClientSession(headers=headers) as session:

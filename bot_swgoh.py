@@ -268,7 +268,11 @@ def fetch_pvp_ranks(ally_code: str):
                 unit_def_id = unit['unitDefId']
                 base_name = unit_def_id.split(':')[0]  # Extract the part before the colon
                 character_info = load_character_base_id(base_name)  # Fetch character data
-                squad_lineup.append(character_info)  # Add to lineup
+                # If character_info is missing, append a minimal fallback dict so downstream code doesn't fail
+                if character_info is None:
+                    squad_lineup.append({"unitDefId": unit_def_id, "name": base_name})
+                else:
+                    squad_lineup.append(character_info)  # Add to lineup
 
             ranks[entry['tab']] = {
                 'rank': entry['rank'],
@@ -429,18 +433,37 @@ def get_payout_embed(payout_players):
 
 def get_squad_update_embed(updated_squad):
     # Create an Embed object
-    embed = discord.Embed(color=0x8B10E3, title=f"{updated_squad["name"]} Squad Update")
+    squad_name = updated_squad.get("name") or "Unknown Squad"
+    embed = discord.Embed(color=0x8B10E3, title=f"{squad_name} Squad Update")
 
-    # Convert save time to Discord-friendly timestamp
-    save_time_in_seconds = int(updated_squad['save_time']) // 1000
+    # Convert save time to Discord-friendly timestamp (guard against missing/invalid values)
+    save_time_raw = updated_squad.get('save_time')
+    try:
+        save_time_in_seconds = int(save_time_raw) // 1000 if save_time_raw is not None else 0
+    except (ValueError, TypeError):
+        save_time_in_seconds = 0
     save_time_str = f"<t:{save_time_in_seconds}:f>"
 
+    # Normalize squad_lineup to a list and build a safe, concise names string
+    squad_lineup = updated_squad.get('squad_lineup') or []
+    # Safely extract a name from each unit dict (or string fallback) without raising KeyError
+    unit_names = ", ".join(
+        (
+            (unit.get('name') if isinstance(unit, dict) else str(unit))
+            or (unit.get('unitDefId').split(':')[0] if isinstance(unit, dict) and unit.get('unitDefId') else "Unknown")
+        )
+        for unit in squad_lineup if unit
+    ) or "Unknown Squad"
 
-    # Generate squad lineup string
-    unit_names = ", ".join([unit['name'] for unit in updated_squad['squad_lineup']])
-    # Add the first player's squad image as the embed's thumbnail
-    if updated_squad['squad_lineup'] != None:
-        embed.set_thumbnail(url=updated_squad['squad_lineup'][0]['image'])
+    # Add the first player's squad image as the embed's thumbnail if available
+    if squad_lineup and isinstance(squad_lineup[0], dict):
+        thumb_url = squad_lineup[0].get('image') or squad_lineup[0].get('portrait_url')
+        if thumb_url:
+            try:
+                embed.set_thumbnail(url=thumb_url)
+            except Exception:
+                # If setting thumbnail fails, continue without it
+                pass
 
     # Add the group of squads to the embed
     squad_text = unit_names
@@ -1621,8 +1644,17 @@ async def sync(ctx: discord.ApplicationContext):
 # Task that runs every 30 minutes
 @tasks.loop(minutes=30)
 async def update_mod_data():
-    check_and_update_mod_data()
-    await update_all_characters_cache()
+    try:
+        # Keep mod data check separate (may be synchronous)
+        check_and_update_mod_data()
+    except Exception as e:
+        print(f"Error while checking/updating mod data: {e}")
+
+    try:
+        await update_all_characters_cache()
+    except Exception as e:
+        # Prevent the background task from crashing the whole bot when external API is unavailable
+        print(f"Warning: failed to update character cache: {e}")
 
 @tasks.loop(minutes=1)
 @print_and_ignore_exceptions
