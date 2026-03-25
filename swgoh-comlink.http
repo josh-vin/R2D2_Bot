@@ -128,6 +128,27 @@ Content-Type: {{format}}
   "payload": {}
 }
 
+### Get Metadata
+POST {{baseUrl}}/metadata
+Content-Type: {{format}}
+
+{
+  "payload": {}
+}
+
+### Get Data
+POST {{baseUrl}}/data
+Content-Type: {{format}}
+
+{
+ "payload": {
+    "version": "0.37.0:siY-7g7ETs6TYA1Vqs19iA",
+    "includePveUnits": false,
+    "requestSegment": 3
+ },
+ "enums": false
+}
+
 ### Get Characters from swgoh.gg
 # Needs api key
 # May be useful for planned features

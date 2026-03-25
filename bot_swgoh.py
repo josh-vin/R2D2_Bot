@@ -1568,11 +1568,17 @@ async def set_raid_channel(ctx: discord.ApplicationContext, channel: discord.Tex
     description="Tickets XXXXXX - Max of 210k possible",
     required=True
 )
-async def set_tickets(ctx: discord.ApplicationContext, tickets: int):
+@option(
+    "raid_end_epoch",
+    description="Epoch time for the raid end. 0 or blank if no active raid.",
+    required=False
+)
+async def set_tickets(ctx: discord.ApplicationContext, tickets: int, raid_end_epoch: int):
     guild_id = str(ctx.guild.id)
     guild_reset_times[guild_id]["current_tickets"] = tickets
+    guild_reset_times[guild_id]["raid_end_epoch"] = raid_end_epoch or 0
     save_guild_reset_times()
-    await ctx.respond(f"Current tickets set to `{tickets:,}`.")
+    await ctx.respond(f"Current tickets set to `{tickets:,}`. Raid end time set to <t:{raid_end_epoch}:F>." if raid_end_epoch else f"Current tickets set to `{tickets:,}`. No active raid.")
 
 @raid.command(
     name="status",
